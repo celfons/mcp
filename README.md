@@ -1,53 +1,105 @@
-# MCP Server (createMcpHandler)
+# Social MCP Portal (Cloudflare Workers)
 
-The simplest way to run a stateless MCP server on Cloudflare Workers. Uses `createMcpHandler` from the Agents SDK to handle all MCP protocol details in one line.
+MCP servers for **Instagram**, **Facebook Pages** and **X (Twitter)**, running as a single stateless Worker via `createMcpHandler` from the Agents SDK.
 
-## What it demonstrates
+## Endpoints
 
-- **`createMcpHandler`** — the Agents SDK helper that turns an `McpServer` factory into a Worker-compatible fetch handler
-- **Minimal setup** — define tools in a factory, pass the factory to `createMcpHandler`, done
-- **Stateless** — no Durable Objects, no persistent state, each request is independent
+| Endpoint | Server | Tools |
+|----------|--------|-------|
+| `/mcp` | Social MCP Portal | every tool below, in one endpoint |
+| `/mcp/instagram` | Instagram MCP Server | `instagram_*` |
+| `/mcp/facebook` | Facebook MCP Server | `facebook_*` |
+| `/mcp/x` | X (Twitter) MCP Server | `x_*` |
+
+Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
+
+## Tools
+
+### Instagram (Graph API — Business/Creator accounts)
+
+| Tool | What it does |
+|------|--------------|
+| `instagram_get_profile` | Profile data (followers, bio, media count) |
+| `instagram_list_media` | Recent posts |
+| `instagram_get_media` | Details of a single post |
+| `instagram_get_media_insights` | Post metrics (reach, likes, saves, shares) |
+| `instagram_publish_post` | Publishes an image or reel (container + publish) |
+| `instagram_list_comments` | Comments on a post |
+| `instagram_reply_to_comment` | Replies to a comment |
+
+### Facebook (Pages Graph API)
+
+| Tool | What it does |
+|------|--------------|
+| `facebook_list_pages` | Pages the token can manage |
+| `facebook_get_page` | Page details |
+| `facebook_list_posts` | Recent Page posts |
+| `facebook_create_post` | Publishes a text post (optionally with a link) |
+| `facebook_upload_photo` | Publishes a photo from a public URL |
+| `facebook_delete_post` | Deletes a post |
+| `facebook_get_post_insights` | Post metrics |
+| `facebook_list_comments` | Comments on a post |
+| `facebook_reply_to_comment` | Replies to a comment |
+
+### X / Twitter (API v2)
+
+| Tool | What it does |
+|------|--------------|
+| `x_get_me` | Authenticated account |
+| `x_get_user` | Profile lookup by @username |
+| `x_list_user_tweets` | Recent posts from an account |
+| `x_get_tweet` | A single post with its metrics |
+| `x_search_recent` | Search posts from the last 7 days |
+| `x_post_tweet` | Publishes a post (reply/quote supported) |
+| `x_delete_tweet` | Deletes a post |
+
+## Credentials
+
+Store them as Worker secrets — never in `wrangler.jsonc`:
+
+```sh
+npx wrangler secret put FACEBOOK_ACCESS_TOKEN     # Page token (Facebook, and Instagram fallback)
+npx wrangler secret put INSTAGRAM_ACCESS_TOKEN    # optional; overrides the token above for Instagram
+npx wrangler secret put X_BEARER_TOKEN            # X app-only token (reads)
+npx wrangler secret put X_USER_ACCESS_TOKEN       # X user-context token (posting/deleting)
+```
+
+For local development, put the same keys in a `.dev.vars` file (git-ignored).
+
+Required permissions:
+
+- **Instagram**: `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`
+- **Facebook**: `pages_read_engagement`, `pages_manage_posts`, `pages_manage_engagement`
+- **X**: `tweet.read`, `users.read`, and `tweet.write` for publishing
+
+The Graph API version defaults to `v21.0` and can be changed with the `GRAPH_API_VERSION` var in `wrangler.jsonc`.
+
+Any tool called without its credential returns an MCP error result explaining which secret is missing — it never leaks the token value.
 
 ## Running
 
 ```sh
-pnpm install
-pnpm start
+npm install
+npm start      # http://localhost:5173 — built-in tool tester with an endpoint switcher
+npm run deploy
 ```
 
-Open the browser to see the built-in tool tester, or connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) at `http://localhost:5173/mcp`.
+Connect an MCP client (Claude, MCP Inspector, …) to `https://<your-worker>/mcp`, or to one of the per-network endpoints.
 
-## How it works
+## Structure
 
-```typescript
-import { McpServer } from "@modelcontextprotocol/server";
-import { createMcpHandler } from "agents/mcp/server";
-import { z } from "zod";
-
-function createServer() {
-  const server = new McpServer({ name: "Hello MCP Server", version: "1.0.0" });
-  server.registerTool(
-    "hello",
-    {
-      description: "Returns a greeting",
-      inputSchema: { name: z.string().optional() }
-    },
-    async ({ name }) => ({
-      content: [{ type: "text", text: `Hello, ${name ?? "World"}!` }]
-    })
-  );
-  return server;
-}
-
-export default {
-  fetch(request, env, ctx) {
-    return createMcpHandler(createServer)(request, env, ctx);
-  }
-} satisfies ExportedHandler;
+```
+src/
+  server.ts            routing: one MCP server per endpoint
+  social/
+    shared.ts          HTTP helper, error handling, secret loading
+    instagram.ts       instagram_* tools
+    facebook.ts        facebook_* tools
+    twitter.ts         x_* tools
+    env.d.ts           secret/var types
+  client.tsx           browser tool tester
 ```
 
-## Related examples
+## Adding a network
 
-- [`mcp`](../mcp/) — stateful MCP server with `McpAgent` and Durable Objects
-- [`mcp-worker-authenticated`](../mcp-worker-authenticated/) — adding OAuth authentication
-- [`mcp-client`](../mcp-client/) — connecting to MCP servers as a client
+Create `src/social/<network>.ts` exporting a `register<Network>Tools(server, env)` function, then add it to the `SERVERS` map in `src/server.ts`.
