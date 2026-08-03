@@ -1,6 +1,6 @@
 # Social MCP Portal (Cloudflare Workers)
 
-MCP servers for **Instagram**, **Facebook Pages** and **X (Twitter)**, running as a single stateless Worker via `createMcpHandler` from the Agents SDK.
+MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**, **Google Business Profile**, **YouTube**, **Google Ads** and **Google Analytics (GA4)**, running as a single stateless Worker via `createMcpHandler` from the Agents SDK.
 
 ## Endpoints
 
@@ -10,6 +10,12 @@ MCP servers for **Instagram**, **Facebook Pages** and **X (Twitter)**, running a
 | `/mcp/instagram` | Instagram MCP Server | `instagram_*` |
 | `/mcp/facebook` | Facebook MCP Server | `facebook_*` |
 | `/mcp/x` | X (Twitter) MCP Server | `x_*` |
+| `/mcp/whatsapp` | WhatsApp MCP Server | `whatsapp_*` |
+| `/mcp/google` | Google MCP Server | all four Google servers below |
+| `/mcp/google-business` | Google Business Profile MCP Server | `google_business_*` |
+| `/mcp/youtube` | YouTube MCP Server | `youtube_*` |
+| `/mcp/google-ads` | Google Ads MCP Server | `google_ads_*` |
+| `/mcp/google-analytics` | Google Analytics MCP Server | `ga4_*` |
 
 Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
 
@@ -53,6 +59,66 @@ Every endpoint also exposes `ping`, which reports which credentials are configur
 | `x_post_tweet` | Publishes a post (reply/quote supported) |
 | `x_delete_tweet` | Deletes a post |
 
+### WhatsApp (Cloud API)
+
+| Tool | What it does |
+|------|--------------|
+| `whatsapp_send_message` | Free-form text (24-hour window only) |
+| `whatsapp_send_template` | Approved template, with body parameters |
+| `whatsapp_send_media` | Image, video, audio or document from a URL |
+| `whatsapp_send_reaction` | Reacts to a message with an emoji |
+| `whatsapp_mark_as_read` | Marks a received message as read |
+| `whatsapp_get_business_profile` | Business profile of the sending number |
+| `whatsapp_list_templates` | Templates of a WABA, with approval status |
+| `whatsapp_get_media_url` | Download URL of received media |
+
+### Google Business Profile
+
+| Tool | What it does |
+|------|--------------|
+| `google_business_list_accounts` | Manageable accounts |
+| `google_business_list_locations` | Locations of an account |
+| `google_business_get_location` | Address, hours, phone, categories |
+| `google_business_list_reviews` | Reviews with rating and existing replies |
+| `google_business_reply_to_review` | Replies to a review |
+| `google_business_create_post` | Publishes a local post, with optional CTA |
+
+### YouTube (Data API v3)
+
+| Tool | What it does |
+|------|--------------|
+| `youtube_get_channel` | Channel by ID, handle, or the authenticated one |
+| `youtube_list_videos` | Recent videos of a channel |
+| `youtube_get_video` | Video with views, likes and comment count |
+| `youtube_search` | Searches videos, channels or playlists |
+| `youtube_list_comments` | Comment threads on a video |
+| `youtube_reply_to_comment` | Replies to a comment |
+| `youtube_update_video` | Title, description, tags, privacy |
+
+### Google Ads
+
+| Tool | What it does |
+|------|--------------|
+| `google_ads_list_accounts` | Accessible accounts |
+| `google_ads_list_campaigns` | Campaigns with status, budget and metrics |
+| `google_ads_campaign_performance` | Daily performance of one campaign |
+| `google_ads_list_ad_groups` | Ad groups of the account or a campaign |
+| `google_ads_keyword_performance` | Keyword metrics, ordered by impressions |
+| `google_ads_run_query` | Arbitrary GAQL query |
+| `google_ads_update_campaign_status` | Pauses/enables/removes a campaign — **changes live spend** |
+
+### Google Analytics (GA4)
+
+| Tool | What it does |
+|------|--------------|
+| `ga4_list_accounts` | Analytics accounts |
+| `ga4_list_properties` | GA4 properties of an account |
+| `ga4_report` | Report with the metrics/dimensions you choose |
+| `ga4_traffic_overview` | Users, sessions, engagement and conversions by channel |
+| `ga4_top_pages` | Most viewed pages |
+| `ga4_realtime` | Users active right now |
+| `ga4_list_metadata` | Metrics and dimensions available on the property |
+
 ## Credentials
 
 Store them as Worker secrets — never in `wrangler.jsonc`:
@@ -62,7 +128,25 @@ npx wrangler secret put FACEBOOK_ACCESS_TOKEN     # Page token (Facebook, and In
 npx wrangler secret put INSTAGRAM_ACCESS_TOKEN    # optional; overrides the token above for Instagram
 npx wrangler secret put X_BEARER_TOKEN            # X app-only token (reads)
 npx wrangler secret put X_USER_ACCESS_TOKEN       # X user-context token (posting/deleting)
+
+# WhatsApp Cloud API
+npx wrangler secret put WHATSAPP_ACCESS_TOKEN     # optional; falls back to FACEBOOK_ACCESS_TOKEN
+npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID  # default sender number ID
+
+# Google (shared by Business Profile, YouTube, Ads and Analytics)
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put GOOGLE_REFRESH_TOKEN
+
+# Google, per-product extras
+npx wrangler secret put YOUTUBE_API_KEY               # optional; used for read-only YouTube calls
+npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
+npx wrangler secret put GOOGLE_ADS_LOGIN_CUSTOMER_ID  # optional, for MCC accounts
+npx wrangler secret put GOOGLE_ADS_CUSTOMER_ID        # optional default account
+npx wrangler secret put GA4_PROPERTY_ID               # optional default property
 ```
+
+Google access tokens expire in about an hour, so the Worker mints them on demand from the refresh token and caches them in the isolate. A static `GOOGLE_ACCESS_TOKEN` is also accepted, which is convenient for local testing but will expire in production.
 
 For local development, put the same keys in a `.dev.vars` file (git-ignored).
 
@@ -71,6 +155,11 @@ Required permissions:
 - **Instagram**: `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`
 - **Facebook**: `pages_read_engagement`, `pages_manage_posts`, `pages_manage_engagement`
 - **X**: `tweet.read`, `users.read`, and `tweet.write` for publishing
+- **WhatsApp**: `whatsapp_business_messaging`, `whatsapp_business_management`
+- **Google Business Profile**: `business.manage`
+- **YouTube**: `youtube.force-ssl` (writes); reads can use an API key
+- **Google Ads**: `adwords`, plus an approved developer token
+- **GA4**: `analytics.readonly`
 
 The Graph API version defaults to `v21.0` and can be changed with the `GRAPH_API_VERSION` var in `wrangler.jsonc`.
 
@@ -110,10 +199,16 @@ src/
     instagram.ts       instagram_* tools
     facebook.ts        facebook_* tools
     twitter.ts         x_* tools
+    whatsapp.ts        whatsapp_* tools
+    google-shared.ts   Google OAuth: refresh token -> cached access token
+    google-business.ts google_business_* tools
+    youtube.ts         youtube_* tools
+    google-ads.ts      google_ads_* tools
+    google-analytics.ts ga4_* tools
     env.d.ts           secret/var types
   client.tsx           browser tool tester
 ```
 
 ## Adding a network
 
-Create `src/social/<network>.ts` exporting a `register<Network>Tools(server, env)` function, then add it to the `SERVERS` map in `src/server.ts`.
+Create `src/social/<network>.ts` exporting a `register<Network>Tools(server, env)` function, then add it to the `SERVERS` map in `src/server.ts`. For a Google product, reuse `googleGet`/`googlePost` from `google-shared.ts` so it shares the token refresh.

@@ -192,7 +192,12 @@ const ENDPOINTS = [
   { path: "/mcp", label: "All" },
   { path: "/mcp/instagram", label: "Instagram" },
   { path: "/mcp/facebook", label: "Facebook" },
-  { path: "/mcp/x", label: "X" }
+  { path: "/mcp/x", label: "X" },
+  { path: "/mcp/whatsapp", label: "WhatsApp" },
+  { path: "/mcp/google-business", label: "GBP" },
+  { path: "/mcp/youtube", label: "YouTube" },
+  { path: "/mcp/google-ads", label: "Ads" },
+  { path: "/mcp/google-analytics", label: "GA4" }
 ] as const;
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -441,7 +446,7 @@ function App() {
               />
               <div>
                 <Text size="sm" bold>
-                  Social MCP Portal — Instagram, Facebook and X
+                  Social MCP Portal — social networks and Google
                 </Text>
                 <span className="mt-1 block">
                   <Text size="xs" variant="secondary">
@@ -460,6 +465,10 @@ function App() {
                     ,{" "}
                     <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
                       /mcp/x
+                    </code>
+                    ,{" "}
+                    <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
+                      /mcp/whatsapp
                     </code>
                     ), while{" "}
                     <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">

@@ -15,6 +15,26 @@ declare global {
     X_BEARER_TOKEN?: string;
     /** X API v2 user-context token (posting/deleting). */
     X_USER_ACCESS_TOKEN?: string;
+    /** WhatsApp Cloud API token. Falls back to FACEBOOK_ACCESS_TOKEN. */
+    WHATSAPP_ACCESS_TOKEN?: string;
+    /** Default WhatsApp sender phone number ID. */
+    WHATSAPP_PHONE_NUMBER_ID?: string;
+    /** Google OAuth client, used to mint access tokens from the refresh token. */
+    GOOGLE_CLIENT_ID?: string;
+    GOOGLE_CLIENT_SECRET?: string;
+    GOOGLE_REFRESH_TOKEN?: string;
+    /** Static Google access token; skips the refresh flow (expires in ~1h). */
+    GOOGLE_ACCESS_TOKEN?: string;
+    /** YouTube API key, preferred for read-only calls. */
+    YOUTUBE_API_KEY?: string;
+    /** Google Ads developer token and account defaults. */
+    GOOGLE_ADS_DEVELOPER_TOKEN?: string;
+    GOOGLE_ADS_LOGIN_CUSTOMER_ID?: string;
+    GOOGLE_ADS_CUSTOMER_ID?: string;
+    /** Google Ads API version, e.g. "v18". Optional. */
+    GOOGLE_ADS_API_VERSION?: string;
+    /** Default GA4 property ID. */
+    GA4_PROPERTY_ID?: string;
   }
 }
 
