@@ -80,9 +80,23 @@ Any tool called without its credential returns an MCP error result explaining wh
 
 ```sh
 npm install
-npm start      # http://localhost:5173 — built-in tool tester with an endpoint switcher
-npm run deploy
+npm start        # http://localhost:5173 — built-in tool tester with an endpoint switcher
+npm run build    # generates dist/ (Worker + client assets)
+npm run deploy   # build + wrangler deploy
 ```
+
+### Deploying from Cloudflare Workers Builds
+
+The Vite plugin is what fills in `assets.directory` — it writes the final Worker config to `dist/mcp_social/wrangler.json` at build time. So a bare `npx wrangler deploy` with no build first fails with:
+
+```
+✘ [ERROR] The `assets` property in your configuration is missing the required `directory` property.
+```
+
+In the Workers Builds settings for this project, set **either**:
+
+- **Build command**: `npm run build` (keeping the default deploy command `npx wrangler deploy`), **or**
+- **Deploy command**: `npm run deploy` (which builds and deploys in one step).
 
 Connect an MCP client (Claude, MCP Inspector, …) to `https://<your-worker>/mcp`, or to one of the per-network endpoints.
 
