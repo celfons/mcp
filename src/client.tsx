@@ -188,6 +188,13 @@ function ToolCard({
   );
 }
 
+const ENDPOINTS = [
+  { path: "/mcp", label: "All" },
+  { path: "/mcp/instagram", label: "Instagram" },
+  { path: "/mcp/facebook", label: "Facebook" },
+  { path: "/mcp/x", label: "X" }
+] as const;
+
 type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
@@ -245,14 +252,17 @@ function App() {
   const [tools, setTools] = useState<McpTool[]>([]);
   const [resources, setResources] = useState<McpResource[]>([]);
   const [results, setResults] = useState<ToolResult[]>([]);
+  const [endpoint, setEndpoint] = useState<string>(ENDPOINTS[0].path);
   const sessionRef = useRef<string | null>(null);
 
   const connect = useCallback(async () => {
     try {
       setStatus("connecting");
+      setTools([]);
+      setResources([]);
 
       const init = await mcpFetch(
-        "/mcp",
+        endpoint,
         "initialize",
         {
           protocolVersion: "2025-03-26",
@@ -271,9 +281,14 @@ function App() {
         | undefined;
       setServerInfo(initResult?.serverInfo ?? null);
 
-      await mcpFetch("/mcp", "notifications/initialized", {}, init.sessionId);
+      await mcpFetch(endpoint, "notifications/initialized", {}, init.sessionId);
 
-      const toolsRes = await mcpFetch("/mcp", "tools/list", {}, init.sessionId);
+      const toolsRes = await mcpFetch(
+        endpoint,
+        "tools/list",
+        {},
+        init.sessionId
+      );
       const toolsResult = toolsRes.data?.result as
         | { tools?: McpTool[] }
         | undefined;
@@ -281,7 +296,7 @@ function App() {
 
       try {
         const resourcesRes = await mcpFetch(
-          "/mcp",
+          endpoint,
           "resources/list",
           {},
           init.sessionId
@@ -298,7 +313,7 @@ function App() {
     } catch {
       setStatus("disconnected");
     }
-  }, []);
+  }, [endpoint]);
 
   useEffect(() => {
     connect();
@@ -310,7 +325,7 @@ function App() {
   ) => {
     try {
       const res = await mcpFetch(
-        "/mcp",
+        endpoint,
         "tools/call",
         { name, arguments: args },
         sessionRef.current
@@ -347,7 +362,7 @@ function App() {
   const handleReadResource = async (uri: string) => {
     try {
       const res = await mcpFetch(
-        "/mcp",
+        endpoint,
         "resources/read",
         { uri },
         sessionRef.current
@@ -387,6 +402,18 @@ function App() {
             )}
           </div>
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1">
+              {ENDPOINTS.map((option) => (
+                <Button
+                  key={option.path}
+                  size="sm"
+                  variant={endpoint === option.path ? "primary" : "ghost"}
+                  onClick={() => setEndpoint(option.path)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
             <ConnectionIndicator status={status} />
             <ModeToggle />
             {status === "disconnected" && (
@@ -414,21 +441,35 @@ function App() {
               />
               <div>
                 <Text size="sm" bold>
-                  Stateless MCP Server (createMcpHandler)
+                  Social MCP Portal — Instagram, Facebook and X
                 </Text>
                 <span className="mt-1 block">
                   <Text size="xs" variant="secondary">
-                    The simplest way to run an MCP server on Cloudflare Workers.
-                    Uses{" "}
+                    Connected to{" "}
                     <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
-                      createMcpHandler
-                    </code>{" "}
-                    from the Agents SDK to wrap an{" "}
+                      {endpoint}
+                    </code>
+                    . Each network also has its own endpoint (
                     <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
-                      McpServer
+                      /mcp/instagram
+                    </code>
+                    ,{" "}
+                    <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
+                      /mcp/facebook
+                    </code>
+                    ,{" "}
+                    <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
+                      /mcp/x
+                    </code>
+                    ), while{" "}
+                    <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
+                      /mcp
                     </code>{" "}
-                    into a Worker-compatible fetch handler in one line — no
-                    Durable Objects, no persistent state.
+                    exposes every tool at once. Call{" "}
+                    <code className="text-xs px-1 py-0.5 rounded bg-kumo-elevated font-mono">
+                      ping
+                    </code>{" "}
+                    to check which credentials are configured.
                   </Text>
                 </span>
               </div>
