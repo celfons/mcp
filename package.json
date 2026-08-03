@@ -6,7 +6,8 @@
   "scripts": {
     "start": "vite dev",
     "deploy": "vite build && wrangler deploy",
-    "types": "wrangler types env.d.ts --include-runtime false"
+    "types": "wrangler types env.d.ts --include-runtime false",
+    "build": "vite build"
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.6.0",
