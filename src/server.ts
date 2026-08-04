@@ -1,6 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
+import { authorize, unauthorized } from "./gateway/auth";
+import { resolveCredentials } from "./gateway/tenant";
+import { ENDPOINT_POLICY } from "./gateway/toolInventory";
 import { registerFacebookTools } from "./social/facebook";
 import { registerInstagramTools } from "./social/instagram";
 import { registerTwitterTools } from "./social/twitter";
@@ -149,22 +152,59 @@ export default {
     const { pathname } = new URL(request.url);
     const path = pathname.replace(/\/+$/, "") || "/mcp";
 
-    if (!(path in SERVERS) && path.startsWith("/mcp")) {
-      return new Response(
-        JSON.stringify({
-          error: "Unknown MCP endpoint",
-          available: Object.keys(SERVERS)
-        }),
-        { status: 404, headers: { "Content-Type": "application/json" } }
-      );
+    // Só as rotas de MCP passam por aqui; o resto (o portal SPA) é servido pelos
+    // assets e fica sob a política de Access do domínio.
+    if (!path.startsWith("/mcp")) {
+      return new Response("Not found", { status: 404 });
     }
 
-    // The factory runs once per request; `env` is captured from this closure
-    // because the MCP handler only passes protocol context to it.
-    return createMcpHandler(() => createServer(path, env), { route: path })(
-      request,
-      env,
-      ctx
-    );
+    // FRONTEIRA (fundação §1). Antes de qualquer coisa — antes até de decidir se
+    // o endpoint existe. Responder 404 "endpoint desconhecido" a quem não se
+    // autenticou entrega de graça o mapa da superfície a quem só achou a URL.
+    const auth = authorize(request, env);
+    if (!auth.ok) {
+      console.log(JSON.stringify({ event: "gateway.unauthorized", reason: auth.reason, path }));
+      return unauthorized();
+    }
+
+    const policy = ENDPOINT_POLICY[path];
+    if (!(path in SERVERS) || policy === undefined) {
+      // Autenticado e ainda assim inexistente: agora o 404 é informação útil
+      // para quem tem direito a ela, e não reconhecimento para um estranho.
+      return new Response(JSON.stringify({ error: "Unknown MCP endpoint" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // ESCOPO (fundação §3). Um tenant só alcança endpoint declarado como
+    // chamável por tenant. Hoje nenhum é — e a recusa aqui é o que faz disso um
+    // fato verificável, em vez de uma intenção escrita na documentação.
+    if (auth.caller.kind === "platform" && !policy.tenantCallable) {
+      console.log(
+        JSON.stringify({ event: "gateway.endpoint_not_tenant_callable", path, tenantId: auth.caller.tenantId })
+      );
+      return new Response(JSON.stringify({ error: "endpoint not available for tenant calls" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // CREDENCIAL (fundação §2). As tools nunca leem `env` direto: leem o que o
+    // resolvedor devolveu para ESTE chamador. Hoje a resolução é de frota e
+    // recusa qualquer chamada com tenant — por isso a linha abaixo é a segunda
+    // barreira, e não a primeira.
+    const toolEnv = resolveCredentials(env, { caller: auth.caller.kind, tenantId: auth.caller.tenantId });
+    if (toolEnv === null) {
+      console.log(JSON.stringify({ event: "gateway.no_credentials", path, caller: auth.caller.kind }));
+      return new Response(JSON.stringify({ error: "no credentials for this caller" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // A fábrica roda uma vez por requisição; `toolEnv` é capturado deste closure
+    // porque o handler MCP só repassa contexto de protocolo para ela.
+    return createMcpHandler(() => createServer(path, toolEnv), { route: path })(request, env, ctx);
   }
 } satisfies ExportedHandler<Env>;
