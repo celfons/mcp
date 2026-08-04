@@ -39,3 +39,22 @@ declare global {
 }
 
 export {};
+
+declare global {
+  interface Env {
+    /**
+     * Prova da PLATAFORMA no caminho de service binding (#fundação §1).
+     *
+     * Não é "defesa em profundidade opcional": a invocação por binding NÃO
+     * atravessa o edge, então nenhuma política de Cloudflare Access é avaliada
+     * nela — neste caminho, este segredo é o único controle que existe.
+     *
+     * Ausente = o gateway recusa toda chamada que se apresente como plataforma
+     * (`gateway_not_configured`), em vez de aceitar sem prova. Grave com
+     * `wrangler secret put GATEWAY_PLATFORM_SECRET`, com o MESMO valor do lado
+     * da plataforma.
+     */
+    GATEWAY_PLATFORM_SECRET?: string;
+  }
+}
+export {};
