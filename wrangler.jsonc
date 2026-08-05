@@ -20,6 +20,25 @@
 	"vars": {
 		"GRAPH_API_VERSION": "v21.0"
 	},
+	/**
+	 * Manifestos do gateway por tenant (/mcp/tenant).
+	 *
+	 * Duas famílias de chave:
+	 *   tenant-token:<sha-256 do token>  -> tenantId
+	 *   tenant-manifest:<tenantId>       -> o manifesto (JSON)
+	 *
+	 * Guardar o HASH do token, e não o token, é o que faz um dump do KV não virar
+	 * um chaveiro. Sem este binding o endpoint /mcp/tenant responde 503 e o resto
+	 * do Worker segue funcionando normalmente.
+	 *
+	 * Criar com `npx wrangler kv namespace create TENANT_MANIFESTS` e colar o id.
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "TENANT_MANIFESTS",
+			"id": "REPLACE_WITH_KV_NAMESPACE_ID"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
