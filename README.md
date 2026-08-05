@@ -91,7 +91,7 @@ O namespace já existe e o binding está declarado em `wrangler.jsonc`.
 antes de gravar e grava as duas chaves de uma vez:
 
 ```bash
-curl -X PUT https://<worker>/admin/tenants/tnt_1/manifest \
+curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_1/manifest \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "manifest": { ... }, "token": "<token-que-a-plataforma-vai-usar>" }'
@@ -113,7 +113,7 @@ npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-token:<sha256-do-toke
 ```
 
 Do lado da plataforma, a linha em `tenant_mcp_servers` aponta para
-`https://<worker>/mcp/tenant` com `Authorization: Bearer <token>`, e o `tool_policy`
+`https://mcp.closing.trade/mcp/tenant` com `Authorization: Bearer <token>`, e o `tool_policy`
 classifica cada ferramenta com o MESMO escopo declarado aqui.
 
 ### O que o manifesto obriga, e por quê
