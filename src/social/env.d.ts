@@ -40,6 +40,11 @@ declare global {
      * endpoint por tenant responde 503 e o resto do Worker segue igual.
      */
     TENANT_MANIFESTS?: KVNamespace;
+    /**
+     * Segredo da rota de administração de manifestos. Sem ele, /admin/* responde
+     * 503 — ausência de credencial nunca vira "aberto".
+     */
+    ADMIN_TOKEN?: string;
   }
 }
 

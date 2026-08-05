@@ -11,6 +11,7 @@ import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
 import { registerTenantTools } from "./tenant/gateway";
 import { resolveTenant, type ResolvedTenant } from "./tenant/store";
+import { putManifest, deleteManifest, getManifest } from "./tenant/admin";
 
 const VERSION = "2.0.0";
 
@@ -186,6 +187,25 @@ export default {
   async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     const path = pathname.replace(/\/+$/, "") || "/mcp";
+
+    // Administração dos manifestos (celfons/whatsapp#1327). Fora do protocolo
+    // MCP de propósito: quem chama aqui é o portal do operador, não um agente.
+    const admin = /^\/admin\/tenants\/([^/]+)\/manifest$/.exec(path);
+    if (admin) {
+      const tenantId = decodeURIComponent(admin[1]);
+      const result =
+        request.method === "PUT"
+          ? await putManifest(request, env, tenantId)
+          : request.method === "DELETE"
+            ? await deleteManifest(request, env, tenantId)
+            : request.method === "GET"
+              ? await getManifest(request, env, tenantId)
+              : { status: 405, body: { error: "Método não suportado." } };
+      return new Response(JSON.stringify(result.body), {
+        status: result.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
 
     if (path === TENANT_PATH) {
       // O tenant é resolvido ANTES de qualquer ferramenta ser montada: anunciar
