@@ -82,8 +82,30 @@ O índice guarda o **hash** do token, não o token: um dump do KV não vira um c
 
 Cadastrar:
 
-O namespace já existe e o binding está declarado em `wrangler.jsonc`. Para cadastrar
-um tenant:
+O namespace já existe e o binding está declarado em `wrangler.jsonc`.
+
+### Cadastro pela rota admin (preferido)
+
+`PUT /admin/tenants/:tenantId/manifest`, protegida por `ADMIN_TOKEN`
+(`npx wrangler secret put ADMIN_TOKEN`). Ela **valida pelo mesmo `parseManifest`**
+antes de gravar e grava as duas chaves de uma vez:
+
+```bash
+curl -X PUT https://<worker>/admin/tenants/tnt_1/manifest \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "manifest": { ... }, "token": "<token-que-a-plataforma-vai-usar>" }'
+```
+
+Manifesto inválido é recusado com motivo nomeado e **nada** é gravado — diferente
+do painel, que aceita JSON quebrado calado e deixa a falha aparecer depois, como um
+agente respondendo sem o dado. `GET` devolve o manifesto **sem** a credencial da API
+do cliente; `DELETE` torna o tenant inalcançável.
+
+Sem `ADMIN_TOKEN` configurado, `/admin/*` responde 503 — ausência de credencial nunca
+vira "aberto".
+
+### Cadastro pela CLI (emergência)
 
 ```bash
 npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-manifest:tnt_1" --path manifesto.json
