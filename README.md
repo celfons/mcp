@@ -120,6 +120,20 @@ classifica cada ferramenta com o MESMO escopo declarado aqui.
 
 - **`fields` é obrigatório.** Sem projeção, o JSON do cliente iria cru para o prompt —
   com margem, custo interno e dado de terceiro dentro. Campo não declarado não viaja.
+- **Lista: use o caminho de repetição** `produtos[].nome`. Ele projeta todos os itens
+  (até 30, ou até o teto de caracteres), **uma linha por item** com os campos daquele
+  item juntos — é o que permite uma ferramenta de BUSCA e o agente sugerir a partir do
+  catálogo do cliente. Agrupar por campo em vez de por item deixaria o modelo parear
+  preço com o produto errado, que é a pior saída possível deste módulo.
+
+  ```json
+  "fields": [
+    { "path": "produtos[].nome",  "label": "Produto" },
+    { "path": "produtos[].preco", "label": "Preço" }
+  ]
+  ```
+
+  → `Produto: Creatina · Preço: R$ 89`
 - **Ferramenta `customer` precisa declarar o `identityParam` entre os `params`.** O
   backend recusa (`identityParam_missing`) a que não o declara no `inputSchema`;
   aceitar aqui seria anunciar uma ferramenta nunca chamável.

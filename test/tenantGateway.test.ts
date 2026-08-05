@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseManifest } from "../src/tenant/manifest";
 import { checkOutboundUrl, safeFetch, OutboundError } from "../src/tenant/safeUrl";
-import { project, readPath } from "../src/tenant/project";
+import { project, readPath, parseRepeatPath } from "../src/tenant/project";
 import { resolveTenant, hashToken, readBearer } from "../src/tenant/store";
 import { runTool, asStringArgs } from "../src/tenant/gateway";
 
@@ -313,5 +313,82 @@ describe("execução da ferramenta", () => {
       b: "2",
       c: "true"
     });
+  });
+});
+
+// --- 6 · Projeção de LISTA (busca de catálogo) ------------------------------
+//
+// Sem caminho de repetição, uma ferramenta de busca voltava praticamente vazia:
+// a resposta é `{ produtos: [...] }` e a projeção só lia folha escalar, então
+// quem cadastrasse teria de declarar `produtos[0].nome`, `produtos[1].nome`, um
+// índice por vez — e a lista sumia quando o cliente devolvia mais itens do que
+// alguém teve paciência de declarar.
+//
+// É o que permite o agente SUGERIR a partir do catálogo do cliente: o bloco
+// chega como texto no prompt e o modelo escolhe entre o que veio.
+
+describe("projeção de lista", () => {
+  const payload = {
+    produtos: [
+      { nome: "Creatina", preco: "R$ 89", estoque: 3 },
+      { nome: "Whey", preco: "R$ 149", estoque: 0 },
+      { nome: "BCAA", preco: "R$ 59", estoque: 12 }
+    ]
+  };
+  const fields = [
+    { path: "produtos[].nome", label: "Produto" },
+    { path: "produtos[].preco", label: "Preço" }
+  ];
+
+  it("projeta TODOS os itens, uma linha por item", () => {
+    const { text } = project(payload, fields, 500);
+    expect(text.split("\n")).toEqual([
+      "Produto: Creatina · Preço: R$ 89",
+      "Produto: Whey · Preço: R$ 149",
+      "Produto: BCAA · Preço: R$ 59"
+    ]);
+  });
+
+  it("agrupa POR ITEM, não por campo — preço colado no produto errado é a pior saída", () => {
+    const { text } = project(payload, fields, 500);
+    // Cada linha carrega o par completo; nada de "todos os nomes, depois todos
+    // os preços", que daria ao modelo a chance de parear errado.
+    for (const line of text.split("\n")) {
+      expect(line).toMatch(/^Produto: .+ · Preço: .+$/);
+    }
+  });
+
+  it("respeita o teto cortando em item inteiro", () => {
+    const { text, truncated } = project(payload, fields, 40);
+    expect(truncated).toBe(true);
+    expect(text).toBe("Produto: Creatina · Preço: R$ 89");
+  });
+
+  it("convive com campo escalar na mesma projeção", () => {
+    const { text } = project({ total: 3, ...payload }, [{ path: "total", label: "Encontrados" }, ...fields], 500);
+    expect(text.split("\n")[0]).toBe("Encontrados: 3");
+    expect(text.split("\n")).toHaveLength(4);
+  });
+
+  it("lista vazia ou ausente é reportada como campo faltando, não como linha vazia", () => {
+    expect(project({ produtos: [] }, fields, 500).text).toBe("");
+    expect(project({ produtos: [] }, fields, 500).missing).toContain("produtos[].nome");
+    expect(project({}, fields, 500).text).toBe("");
+  });
+
+  it("pula item sem nenhum campo legível em vez de gastar o teto com linha vazia", () => {
+    const { text } = project({ produtos: [{ outra: 1 }, { nome: "Whey", preco: "R$ 149" }] }, fields, 500);
+    expect(text).toBe("Produto: Whey · Preço: R$ 149");
+  });
+
+  it("lê o caminho de repetição, incluindo aninhado", () => {
+    expect(parseRepeatPath("produtos[].nome")).toEqual({ listPath: "produtos", leafPath: "nome" });
+    expect(parseRepeatPath("dados.itens[].preco.valor")).toEqual({ listPath: "dados.itens", leafPath: "preco.valor" });
+    expect(parseRepeatPath("status")).toBeNull();
+  });
+
+  it("continua NÃO serializando objeto — repetição não é porta dos fundos para JSON cru", () => {
+    const { text } = project({ produtos: [{ nome: { pt: "Creatina" } }] }, [{ path: "produtos[].nome", label: "Produto" }], 500);
+    expect(text).toBe("");
   });
 });

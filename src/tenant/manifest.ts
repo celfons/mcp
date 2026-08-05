@@ -49,6 +49,15 @@ export const ParamSchema = z.object({
  * (`dt_prev_ent`) e não ajuda ninguém.
  */
 export const FieldSchema = z.object({
+  /**
+   * Caminho do campo. Aceita ponto e índice (`entrega.previsao`, `itens[0].nome`)
+   * e, para lista, o caminho de REPETIÇÃO `produtos[].nome` — que projeta todos
+   * os itens, agrupados numa linha por item.
+   *
+   * A repetição é o que faz uma ferramenta de BUSCA funcionar: sem ela, quem
+   * cadastra teria de declarar `produtos[0]`, `produtos[1]`… um índice por vez,
+   * e a lista some quando o cliente devolve mais do que alguém declarou.
+   */
   path: z.string().min(1).max(120),
   label: z.string().min(1).max(60)
 });
