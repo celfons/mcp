@@ -82,22 +82,8 @@ O índice guarda o **hash** do token, não o token: um dump do KV não vira um c
 
 Cadastrar:
 
-```bash
-npx wrangler kv namespace create TENANT_MANIFESTS
-```
-
-O binding **não vem declarado** em `wrangler.jsonc`: um id de mentira quebraria o
-deploy (o Workers Builds aplica a configuração de verdade — o `--dry-run` não valida
-o id). Com o namespace criado, acrescente:
-
-```jsonc
-"kv_namespaces": [
-  { "binding": "TENANT_MANIFESTS", "id": "<id devolvido>" }
-]
-```
-
-Enquanto ele não existir, `/mcp/tenant` responde 503 e o resto do Worker segue igual.
-Depois, para cadastrar um tenant:
+O namespace já existe e o binding está declarado em `wrangler.jsonc`. Para cadastrar
+um tenant:
 
 ```bash
 npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-manifest:tnt_1" --path manifesto.json
