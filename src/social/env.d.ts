@@ -35,6 +35,11 @@ declare global {
     GOOGLE_ADS_API_VERSION?: string;
     /** Default GA4 property ID. */
     GA4_PROPERTY_ID?: string;
+    /**
+     * Manifestos do gateway por tenant (/mcp/tenant). Opcional: sem ele o
+     * endpoint por tenant responde 503 e o resto do Worker segue igual.
+     */
+    TENANT_MANIFESTS?: KVNamespace;
   }
 }
 

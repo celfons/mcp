@@ -16,8 +16,125 @@ MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**
 | `/mcp/youtube` | YouTube MCP Server | `youtube_*` |
 | `/mcp/google-ads` | Google Ads MCP Server | `google_ads_*` |
 | `/mcp/google-analytics` | Google Analytics MCP Server | `ga4_*` |
+| `/mcp/tenant` | Tenant API Gateway | sintetizadas do manifesto do tenant |
 
 Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
+
+## Tenant API Gateway (`/mcp/tenant`)
+
+Os outros endpoints têm ferramentas fixas no código. Este não: **as ferramentas são
+sintetizadas do manifesto do tenant que está chamando**, resolvido pelo token da
+requisição. Ele existe para a plataforma de agentes de WhatsApp
+(`celfons/whatsapp`, issue #1324) consultar a API própria de cada cliente ao vivo,
+dentro do turno, **sem que o backend dela mude uma linha**: para o backend, isto
+aqui é um servidor MCP como qualquer outro.
+
+### Como funciona
+
+```
+turno → backend lê tenant_mcp_servers (URL = este endpoint)
+      → tools/list  (sintetizado do manifesto)
+      → o LLM escolhe a ferramenta; bindCallScope injeta o telefone verificado
+      → tools/call  → este gateway chama a API REST do cliente
+                    → projeta SÓ os campos declarados
+      → o texto entra no prompt como <external_data>
+```
+
+### O manifesto
+
+Guardado em KV (`TENANT_MANIFESTS`), em duas famílias de chave:
+
+```
+tenant-token:<sha-256 do token>  ->  tenantId
+tenant-manifest:<tenantId>       ->  o manifesto
+```
+
+O índice guarda o **hash** do token, não o token: um dump do KV não vira um chaveiro.
+
+```json
+{
+  "tenantId": "tnt_1",
+  "label": "ERP da Loja",
+  "baseUrl": "https://api.cliente.com",
+  "auth": { "type": "bearer", "token": "..." },
+  "timeoutMs": 3000,
+  "tools": [
+    {
+      "name": "consultar_pedido",
+      "description": "Status e previsão de entrega de um pedido",
+      "method": "GET",
+      "path": "/pedidos/{orderId}",
+      "scope": "customer",
+      "identityParam": "telefone",
+      "params": [
+        { "name": "orderId", "in": "path", "required": true },
+        { "name": "telefone", "in": "query", "required": true }
+      ],
+      "fields": [
+        { "path": "status", "label": "Status" },
+        { "path": "entrega.previsao", "label": "Previsão" }
+      ],
+      "maxChars": 1200
+    }
+  ]
+}
+```
+
+Cadastrar:
+
+```bash
+npx wrangler kv namespace create TENANT_MANIFESTS
+```
+
+O binding **não vem declarado** em `wrangler.jsonc`: um id de mentira quebraria o
+deploy (o Workers Builds aplica a configuração de verdade — o `--dry-run` não valida
+o id). Com o namespace criado, acrescente:
+
+```jsonc
+"kv_namespaces": [
+  { "binding": "TENANT_MANIFESTS", "id": "<id devolvido>" }
+]
+```
+
+Enquanto ele não existir, `/mcp/tenant` responde 503 e o resto do Worker segue igual.
+Depois, para cadastrar um tenant:
+
+```bash
+npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-manifest:tnt_1" --path manifesto.json
+npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-token:<sha256-do-token>" "tnt_1"
+```
+
+Do lado da plataforma, a linha em `tenant_mcp_servers` aponta para
+`https://<worker>/mcp/tenant` com `Authorization: Bearer <token>`, e o `tool_policy`
+classifica cada ferramenta com o MESMO escopo declarado aqui.
+
+### O que o manifesto obriga, e por quê
+
+- **`fields` é obrigatório.** Sem projeção, o JSON do cliente iria cru para o prompt —
+  com margem, custo interno e dado de terceiro dentro. Campo não declarado não viaja.
+- **Ferramenta `customer` precisa declarar o `identityParam` entre os `params`.** O
+  backend recusa (`identityParam_missing`) a que não o declara no `inputSchema`;
+  aceitar aqui seria anunciar uma ferramenta nunca chamável.
+- **Ferramenta `business` não pode ter `identityParam`** — a contradição é recusada,
+  não resolvida em silêncio.
+- Manifesto inválido é recusado **inteiro**: meio manifesto aplicado é uma ferramenta
+  que some sem ninguém notar.
+
+### O que este gateway assume como responsabilidade
+
+Ao viver fora da plataforma, ele perde o `INV-TENANT-SCOPE` e o guard estrutural que o
+cobra lá. O que sobra é a regra em `src/tenant/store.ts` e os testes: **o token resolve
+UM tenant, e as ferramentas daquela requisição saem do manifesto DAQUELE tenant.** Não
+há caminho que leia manifesto de outro, e não há listagem.
+
+Também moram aqui: o SSRF (`https` apenas, sem faixa privada/loopback/metadata,
+redirecionamento não seguido, corpo com teto de bytes), a credencial da API do cliente,
+e o cuidado de a mensagem de erro **nunca** ecoar o corpo do cliente — esse texto entra
+no prompt de um agente.
+
+**Limite conhecido:** um host que *resolve* para IP privado passa pela guarda (não há
+resolução de DNS antes do `fetch`). Rebind de DNS exigiria proxy com resolvedor próprio;
+está fora de escopo, e é melhor estar escrito do que subentendido.
 
 ## Tools
 
@@ -206,8 +323,18 @@ src/
     google-ads.ts      google_ads_* tools
     google-analytics.ts ga4_* tools
     env.d.ts           secret/var types
+  tenant/
+    manifest.ts        esquema do manifesto (a fronteira do gateway)
+    store.ts           KV: token -> tenant -> manifesto (o isolamento mora aqui)
+    safeUrl.ts         SSRF: destino verificado, sem redirect, corpo com teto
+    project.ts         resposta do cliente -> só os campos declarados
+    gateway.ts         manifesto -> ferramentas MCP
   client.tsx           browser tool tester
+test/
+  tenantGateway.test.ts  isolamento, manifesto, SSRF, projeção, execução
 ```
+
+Testes: `npm test` (vitest).
 
 ## Adding a network
 
