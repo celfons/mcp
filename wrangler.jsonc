@@ -21,22 +21,7 @@
 		"GRAPH_API_VERSION": "v21.0"
 	},
 	/**
-	 * Manifestos do gateway por tenant (/mcp/tenant) — binding OPCIONAL, e por
-	 * isso NÃO declarado aqui.
-	 *
-	 * Um `kv_namespaces` com id de mentira quebra o deploy (o Workers Builds
-	 * aplica esta configuração de verdade, ao contrário do `--dry-run`, que não
-	 * valida o id). Então o binding entra quando o namespace existir, e não
-	 * antes: sem ele, `/mcp/tenant` responde 503 e o resto do Worker segue
-	 * funcionando normalmente.
-	 *
-	 *   npx wrangler kv namespace create TENANT_MANIFESTS
-	 *
-	 * e acrescente, com o id devolvido:
-	 *
-	 *   "kv_namespaces": [
-	 *     { "binding": "TENANT_MANIFESTS", "id": "<id devolvido>" }
-	 *   ]
+	 * Manifestos do gateway por tenant (/mcp/tenant).
 	 *
 	 * Duas famílias de chave:
 	 *   tenant-token:<sha-256 do token>  -> tenantId
@@ -44,7 +29,19 @@
 	 *
 	 * Guardar o HASH do token, e não o token, é o que faz um dump do KV não virar
 	 * um chaveiro.
+	 *
+	 * O id abaixo é de um namespace REAL. Um id que não existe quebra o deploy —
+	 * o Workers Builds aplica esta configuração de verdade, ao contrário do
+	 * `--dry-run`, que não valida o id (foi assim que o build do PR #5 caiu). O
+	 * código segue tolerante: sem o binding, `/mcp/tenant` responde 503 e o resto
+	 * do Worker funciona igual.
 	 */
+	"kv_namespaces": [
+		{
+			"binding": "TENANT_MANIFESTS",
+			"id": "bd1a4cae9bfe4daf932153003eb551d2"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
