@@ -132,6 +132,8 @@ export type EvoPresetBody = {
   idBranch?: unknown;
   label?: unknown;
   token?: unknown;
+  /** `"all"` (default) ou `"business"` — só preço, plano, grade e unidade. */
+  include?: unknown;
 };
 
 /**
@@ -182,10 +184,20 @@ export async function putEvoPreset(
     return json(400, { error: "O token precisa ter ao menos 16 caracteres." });
   }
 
+  // Valor desconhecido é RECUSADO, nunca lido como o default. Um `include:
+  // "buisness"` com erro de digitação, tratado como "all", ativaria as consultas
+  // sobre o aluno numa academia que pediu explicitamente para não tê-las — e o
+  // telefone do cliente passaria a sair do perímetro por causa de um typo.
+  if (body.include !== undefined && body.include !== "all" && body.include !== "business") {
+    return json(400, { error: 'include, quando informado, precisa ser "all" ou "business".' });
+  }
+  const include = body.include === "business" ? ("business" as const) : ("all" as const);
+
   const built = buildEvoManifest({
     tenantId,
     dns,
     secretKey,
+    include,
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.idBranch === "number" ? { idBranch: body.idBranch } : {})
   });
@@ -200,10 +212,13 @@ export async function putEvoPreset(
   return json(200, {
     tenantId,
     preset: "evo",
+    include,
     tools: built.manifest.tools.map((t) => ({ name: t.name, scope: t.scope })),
     tokenIndexed: Boolean(token),
     // Para colar em `PUT /api/admin/tenants/{tenantId}/mcp-server` da plataforma.
-    toolPolicy: evoToolPolicy()
+    // Derivada do manifesto que acabou de ser gravado, então ela nunca descreve
+    // uma consulta que aquele tenant não anuncia.
+    toolPolicy: evoToolPolicy(built.manifest)
   });
 }
 

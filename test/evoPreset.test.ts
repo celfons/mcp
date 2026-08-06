@@ -123,7 +123,7 @@ describe("o preset e a tool_policy da plataforma não podem divergir", () => {
   it("mesma lista de ferramentas, mesmo escopo, mesmo parâmetro de identidade", () => {
     const built = preset();
     if (!built.ok) throw new Error(built.error);
-    const policy = evoToolPolicy();
+    const policy = evoToolPolicy(built.manifest);
 
     expect(Object.keys(policy.tools).sort()).toEqual(built.manifest.tools.map((t) => t.name).sort());
     for (const tool of built.manifest.tools) {
@@ -134,9 +134,64 @@ describe("o preset e a tool_policy da plataforma não podem divergir", () => {
     expect(policy.version).toBe(1);
   });
 
-  it("a policy não é escrita à mão: some junto se a ferramenta sumir", () => {
-    const policy = evoToolPolicy();
-    expect(Object.keys(policy.tools).length).toBe(preset().ok ? (preset() as { ok: true; manifest: { tools: unknown[] } }).manifest.tools.length : -1);
+  it("a policy acompanha o recorte: não descreve consulta que o tenant não anuncia", () => {
+    // A policy é DERIVADA do manifesto, não reconstruída da mesma receita — se
+    // fosse reconstruída, ela teria de aprender o filtro por conta própria, e a
+    // versão que esquecesse dele classificaria consultas que não existem.
+    const built = preset({ include: "business" });
+    if (!built.ok) throw new Error(built.error);
+    const policy = evoToolPolicy(built.manifest);
+
+    expect(Object.keys(policy.tools)).not.toContain("evo_minhas_cobrancas");
+    expect(Object.values(policy.tools).every((r) => r.scope === "business")).toBe(true);
+  });
+});
+
+describe("recorte por classe de consulta", () => {
+  it('include "business" anuncia só as consultas sobre o negócio', () => {
+    const built = preset({ include: "business" });
+    if (!built.ok) throw new Error(built.error);
+
+    expect(built.manifest.tools.map((t) => t.name)).toEqual([
+      "evo_planos_e_precos",
+      "evo_servicos_e_precos",
+      "evo_grade_de_aulas",
+      "evo_modalidades",
+      "evo_unidade"
+    ]);
+  });
+
+  it("nesse modo, o telefone do cliente NUNCA sai do perímetro", () => {
+    // É a consequência que justifica o recorte: sem consulta escopada no aluno,
+    // não há identificador viajando para um servidor de terceiro — e o dever de
+    // aviso do ADR-0036 some porque o fato que o originava deixa de acontecer.
+    const built = preset({ include: "business" });
+    if (!built.ok) throw new Error(built.error);
+
+    for (const tool of built.manifest.tools) {
+      expect(tool.scope).toBe("business");
+      expect(tool.identityParam).toBeUndefined();
+      expect(tool.resolve).toBeUndefined();
+      expect(tool.params.map((p) => p.name)).not.toContain("phone");
+    }
+  });
+
+  it("o default continua sendo tudo — o recorte é opt-in", () => {
+    const todas = preset();
+    if (!todas.ok) throw new Error(todas.error);
+    expect(todas.manifest.tools.length).toBe(9);
+    expect(todas.manifest.tools.some((t) => t.scope === "customer")).toBe(true);
+    expect(preset({ include: "all" }).ok).toBe(true);
+  });
+
+  it("o recorte não muda nada nas consultas que ficam", () => {
+    const todas = preset({ idBranch: 3 });
+    const soNegocio = preset({ idBranch: 3, include: "business" });
+    if (!todas.ok || !soNegocio.ok) throw new Error("preset inválido");
+
+    for (const tool of soNegocio.manifest.tools) {
+      expect(tool).toEqual(todas.manifest.tools.find((t) => t.name === tool.name));
+    }
   });
 });
 

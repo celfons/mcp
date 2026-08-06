@@ -295,3 +295,47 @@ describe("ativação por preset da EVO", () => {
     expect(kv.data.size).toBe(0);
   });
 });
+
+describe("recorte por classe na rota de preset", () => {
+  it('include "business" grava só as consultas sobre o negócio, e a policy acompanha', async () => {
+    const kv = fakeKv();
+    const result = await putEvoPreset(
+      presetReq({ ...EVO_BODY, include: "business" }),
+      envWith(kv),
+      "tnt_gym"
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      include: string;
+      tools: Array<{ name: string; scope: string }>;
+      toolPolicy: { tools: Record<string, { scope: string }> };
+    };
+    expect(body.include).toBe("business");
+    expect(body.tools.every((t) => t.scope === "business")).toBe(true);
+    expect(Object.keys(body.toolPolicy.tools)).not.toContain("evo_minhas_cobrancas");
+
+    // E o que foi GRAVADO é o recorte, não o conjunto inteiro: a resposta não
+    // pode descrever uma coisa e o KV guardar outra.
+    const gravado = parseManifest(JSON.parse(kv.data.get("tenant-manifest:tnt_gym")!));
+    expect(gravado.ok && gravado.manifest.tools.every((t) => t.scope === "business")).toBe(true);
+  });
+
+  it("valor desconhecido é recusado, nunca lido como o default", async () => {
+    // Um `include: "buisness"` tratado como "all" ligaria as consultas sobre o
+    // aluno numa academia que pediu para não tê-las — e o telefone do cliente
+    // passaria a sair do perímetro por causa de um erro de digitação.
+    const kv = fakeKv();
+    const result = await putEvoPreset(presetReq({ ...EVO_BODY, include: "buisness" }), envWith(kv), "tnt_gym");
+    expect(result.status).toBe(400);
+    expect(kv.data.size).toBe(0);
+  });
+
+  it("sem o campo, o comportamento é o de antes — tudo anunciado", async () => {
+    const kv = fakeKv();
+    const result = await putEvoPreset(presetReq(EVO_BODY), envWith(kv), "tnt_gym");
+    const body = result.body as { include: string; tools: Array<{ scope: string }> };
+    expect(body.include).toBe("all");
+    expect(body.tools.some((t) => t.scope === "customer")).toBe(true);
+  });
+});
