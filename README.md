@@ -234,6 +234,7 @@ curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_gym/preset/evo \
         "secretKey": "<secret-key-da-evo>",
         "idBranch": 7,
         "label": "Academia Centro",
+        "include": "business",
         "token": "<token-que-a-plataforma-vai-apresentar>"
       }'
 ```
@@ -241,6 +242,29 @@ curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_gym/preset/evo \
 Auth da EVO é **Basic** (DNS como usuário, secret key como senha), montado aqui — o
 esquema do manifesto não precisa saber o que é Basic. A resposta traz a `tool_policy`
 pronta e **nunca** a credencial.
+
+#### `include`: só preço e catálogo, ou tudo
+
+`"include": "business"` no corpo anuncia **só** as cinco consultas sobre o negócio
+(preço, plano, grade, modalidades, unidade) e deixa de fora as quatro sobre o aluno.
+É a ativação que a maioria das academias vai querer primeiro, e ela tem uma
+consequência que não é cosmética: **o telefone do cliente nunca sai do perímetro.**
+Some com ele o dever de aviso do ADR-0036 — não porque foi dispensado, mas porque o
+fato que o originava deixa de acontecer.
+
+Dava para chegar perto disso só pela `tool_policy` do lado da plataforma (consulta sem
+regra é inchamável, e o modelo nem a vê). Mas ela seguiria sendo **anunciada** e recusada
+a cada turno, somando em `scope_refused/unclassified` — a métrica que existe para gritar
+"o dono esqueceu de classificar" passaria a gritar num estado intencional. Alerta falso é
+o que ensina a ignorar alerta, então o desligamento acontece onde a consulta nasce.
+
+Valor desconhecido é **recusado**, nunca lido como o default: um `"buisness"` com erro de
+digitação tratado como `"all"` ligaria as consultas sobre o aluno numa academia que pediu
+para não tê-las. Sem o campo, tudo é anunciado — o recorte é opt-in.
+
+A `tool_policy` da resposta é **derivada** do manifesto que acabou de ser gravado, então
+ela acompanha o recorte sozinha e nunca descreve uma consulta que aquele tenant não
+anuncia.
 
 **2 · Na plataforma** (`celfons/whatsapp`), cole a `tool_policy` que veio na resposta:
 
@@ -270,6 +294,8 @@ isso a policy é **gerada**, não transcrita.
 | `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` | — |
 | `evo_modalidades` | business | `GET /api/v1/activities` | — |
 | `evo_unidade` | business | `GET /api/v1/configuration` | — |
+
+Com `"include": "business"`, só as cinco últimas são anunciadas.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.

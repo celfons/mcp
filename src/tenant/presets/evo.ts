@@ -1,4 +1,4 @@
-import { parseManifest, type ManifestParseResult } from "../manifest";
+import { parseManifest, type ManifestParseResult, type TenantManifest } from "../manifest";
 
 /**
  * O PRESET da EVO (W12) — o sistema de gestão de academia.
@@ -115,6 +115,25 @@ const IDENTITY_PARAM = {
   transform: PHONE_TRANSFORM
 };
 
+/**
+ * Que classe de consulta esta academia anuncia.
+ *
+ * `"business"` existe para a ativação que só quer preço, plano e grade — a
+ * primeira que a maioria das academias vai querer. As consultas sobre o ALUNO
+ * (plano dele, cobranças, aulas marcadas) simplesmente não são anunciadas, e
+ * com isso o telefone do cliente **nunca sai do perímetro**: o dever de aviso
+ * do ADR-0036 (o identificador saindo para um servidor de terceiro) some junto,
+ * porque o fato que o originava deixa de acontecer.
+ *
+ * Dava para chegar perto disso só pela `tool_policy` do lado da plataforma —
+ * consulta sem regra é inchamável, e o modelo nem a vê. Mas ela seguiria sendo
+ * ANUNCIADA e recusada a cada turno, somando em `scope_refused/unclassified`:
+ * a métrica que existe para gritar "o dono esqueceu de classificar" passaria a
+ * gritar num estado que é intencional. Alerta falso é o que ensina a ignorar
+ * alerta — então o desligamento acontece onde a consulta nasce.
+ */
+export type EvoToolSet = "all" | "business";
+
 export interface EvoPresetInput {
   /** O mesmo id sob o qual o manifesto é gravado no KV. */
   tenantId: string;
@@ -128,6 +147,8 @@ export interface EvoPresetInput {
   idBranch?: number;
   /** Orçamento de parede da ferramenta INTEIRA (os dois saltos). */
   timeoutMs?: number;
+  /** Que classe de consulta anunciar. Default `"all"`. */
+  include?: EvoToolSet;
 }
 
 /** Basic auth em base64, sobre os bytes UTF-8 (e não sobre code points). */
@@ -148,6 +169,10 @@ export function basicAuthValue(user: string, password: string): string {
 export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
   const branch = input.idBranch === undefined ? {} : { idBranch: String(input.idBranch) };
   const label = input.label?.trim() || "EVO";
+  // A filtragem é por `scope` declarado, e não por uma segunda lista de nomes:
+  // uma consulta nova entra na classe dela e o recorte a acompanha sozinho. Uma
+  // lista paralela seria mais um documento para esquecer de atualizar.
+  const keep = (scope: string): boolean => input.include !== "business" || scope === "business";
 
   return parseManifest({
     tenantId: input.tenantId,
@@ -340,27 +365,28 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
         ],
         maxChars: 1200
       }
-    ]
+    ].filter((tool) => keep(tool.scope))
   });
 }
 
+export type ToolRule = { scope: "customer"; identity_param: string } | { scope: "business" };
+export type ToolPolicyDocument = { version: 1; tools: Record<string, ToolRule> };
+
 /**
- * A `tool_policy` que a plataforma precisa gravar em `tenant_mcp_servers`, com
- * a MESMA classificação declarada acima.
+ * A `tool_policy` que a plataforma precisa gravar em `tenant_mcp_servers`.
  *
- * Ela é emitida daqui porque os dois documentos têm de concordar e moram em
- * repositórios diferentes: uma ferramenta `customer` aqui e ausente lá é
- * inchamável (`unclassified`), e o dono só descobre pela métrica. Gerar os dois
- * do mesmo lugar tira a transcrição manual do caminho.
+ * Ela é DERIVADA do manifesto que acabou de ser montado — não reconstruída a
+ * partir da mesma receita. A diferença importa: os dois documentos moram em
+ * repositórios diferentes e têm de concordar (consulta anunciada aqui e não
+ * classificada lá nasce inchamável, e o dono só descobre pela métrica), e
+ * derivar torna a divergência **inexprimível** em vez de vigiada por um teste.
+ * É o método do ADR-0033, e foi o que o recorte por classe cobrou na prática:
+ * uma segunda receita teria de aprender o filtro sozinha, e a versão que
+ * esquecesse dele emitiria regra para consulta que nem existe.
  */
-export function evoToolPolicy(): {
-  version: 1;
-  tools: Record<string, { scope: "customer"; identity_param: string } | { scope: "business" }>;
-} {
-  const built = buildEvoManifest({ tenantId: "policy", dns: "d", secretKey: "s" });
-  if (!built.ok) throw new Error(`preset EVO inválido: ${built.error}`);
-  const tools: Record<string, { scope: "customer"; identity_param: string } | { scope: "business" }> = {};
-  for (const tool of built.manifest.tools) {
+export function evoToolPolicy(manifest: TenantManifest): ToolPolicyDocument {
+  const tools: Record<string, ToolRule> = {};
+  for (const tool of manifest.tools) {
     tools[tool.name] =
       tool.scope === "customer"
         ? { scope: "customer", identity_param: tool.identityParam ?? IDENTITY_PARAM_NAME }
