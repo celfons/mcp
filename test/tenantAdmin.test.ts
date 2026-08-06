@@ -251,9 +251,11 @@ describe("ativação por preset da EVO", () => {
 
     // A policy sai daqui pronta para colar na plataforma: transcrevê-la à mão é
     // como uma ferramenta acaba `unclassified` e inchamável sem ninguém ver.
-    const body = result.body as { toolPolicy: { version: number; tools: Record<string, unknown> } };
-    expect(body.toolPolicy.version).toBe(1);
+    const body = result.body as { toolPolicy: { tools: Record<string, unknown> } };
     expect(Object.keys(body.toolPolicy.tools)).toContain("evo_minhas_cobrancas");
+    // No dialeto da BORDA da plataforma: colável sem tradução manual.
+    expect(body.toolPolicy).not.toHaveProperty("version");
+    expect(body.toolPolicy.tools.evo_meu_plano).toEqual({ scope: "customer", identityParam: "phone" });
   });
 
   it("a resposta NUNCA carrega a credencial da EVO", async () => {

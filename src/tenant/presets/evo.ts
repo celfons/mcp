@@ -369,11 +369,12 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
   });
 }
 
-export type ToolRule = { scope: "customer"; identity_param: string } | { scope: "business" };
-export type ToolPolicyDocument = { version: 1; tools: Record<string, ToolRule> };
+export type ToolRule = { scope: "customer"; identityParam: string } | { scope: "business" };
+export type ToolPolicyDocument = { tools: Record<string, ToolRule> };
 
 /**
- * A `tool_policy` que a plataforma precisa gravar em `tenant_mcp_servers`.
+ * A `tool_policy` para colar em
+ * `POST /api/admin/tenants/{tenantId}/mcp-server` da plataforma.
  *
  * Ela é DERIVADA do manifesto que acabou de ser montado — não reconstruída a
  * partir da mesma receita. A diferença importa: os dois documentos moram em
@@ -383,14 +384,23 @@ export type ToolPolicyDocument = { version: 1; tools: Record<string, ToolRule> }
  * É o método do ADR-0033, e foi o que o recorte por classe cobrou na prática:
  * uma segunda receita teria de aprender o filtro sozinha, e a versão que
  * esquecesse dele emitiria regra para consulta que nem existe.
+ *
+ * ⚠ **O dialeto é o da BORDA da plataforma, não o do banco dela.** São dois, e
+ * eles não são iguais: a API admin recebe `identityParam` em camelCase e sem
+ * `version`; o `serializeToolPolicy` de lá é que converte para
+ * `{version:1, …, identity_param}` ao gravar. Emitir a forma persistida faria a
+ * primeira ativação bater num 400 de validação — e a versão anterior deste
+ * arquivo fazia exatamente isso. O que este preset promete é um documento
+ * COLÁVEL; um que precisa de tradução manual não cumpre a promessa e reabre a
+ * transcrição que ele existe para eliminar.
  */
 export function evoToolPolicy(manifest: TenantManifest): ToolPolicyDocument {
   const tools: Record<string, ToolRule> = {};
   for (const tool of manifest.tools) {
     tools[tool.name] =
       tool.scope === "customer"
-        ? { scope: "customer", identity_param: tool.identityParam ?? IDENTITY_PARAM_NAME }
+        ? { scope: "customer", identityParam: tool.identityParam ?? IDENTITY_PARAM_NAME }
         : { scope: "business" };
   }
-  return { version: 1, tools };
+  return { tools };
 }

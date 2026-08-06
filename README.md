@@ -266,20 +266,26 @@ A `tool_policy` da resposta é **derivada** do manifesto que acabou de ser grava
 ela acompanha o recorte sozinha e nunca descreve uma consulta que aquele tenant não
 anuncia.
 
-**2 · Na plataforma** (`celfons/whatsapp`), cole a `tool_policy` que veio na resposta:
+**2 · Na plataforma** (`celfons/whatsapp`), cole a `tool_policy` que veio na resposta —
+**`POST`**, e a chave vai em `x-admin-key`:
 
 ```bash
-curl -X PUT https://<plataforma>/api/admin/tenants/tnt_gym/mcp-server \
-  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+curl -X POST https://<plataforma>/api/admin/tenants/tnt_gym/mcp-server \
+  -H "x-admin-key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
   -d '{ "label": "EVO",
         "url": "https://mcp.closing.trade/mcp/tenant",
         "authHeader": "Bearer <o-mesmo-token-acima>",
-        "toolPolicy": { ... } }'
+        "toolPolicy": { "tools": { ... } } }'
 ```
+
+A resposta **ecoa** o que foi classificado (`classifiedTools`, `allAnnounced`) — confira
+que o número bate com o que você mandou.
 
 Os dois documentos **têm de concordar**: uma ferramenta anunciada aqui e não classificada
 lá nasce inchamável (`unclassified`), e o dono só descobre pela métrica de degradação. Por
-isso a policy é **gerada**, não transcrita.
+isso a policy é **gerada**, não transcrita — e no dialeto da **borda** da plataforma
+(`identityParam` camelCase, sem `version`), não no do banco dela, senão precisaria de
+tradução manual e a promessa de "colável" seria falsa.
 
 ### As ferramentas
 

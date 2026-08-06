@@ -129,9 +129,24 @@ describe("o preset e a tool_policy da plataforma não podem divergir", () => {
     for (const tool of built.manifest.tools) {
       const rule = policy.tools[tool.name];
       expect(rule.scope).toBe(tool.scope);
-      if (rule.scope === "customer") expect(rule.identity_param).toBe(tool.identityParam);
+      if (rule.scope === "customer") expect(rule.identityParam).toBe(tool.identityParam);
     }
-    expect(policy.version).toBe(1);
+  });
+
+  it("fala o dialeto da BORDA da plataforma, não o do banco dela", () => {
+    // São dois dialetos, e eles não são iguais: a API admin recebe
+    // `identityParam` em camelCase e sem `version`; o `serializeToolPolicy` de
+    // lá é que converte para a forma persistida ao gravar. Emitir a forma do
+    // banco faz a primeira ativação bater num 400 — e um documento que precisa
+    // de tradução manual não é colável, que é a única coisa que ele promete.
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    const policy = evoToolPolicy(built.manifest);
+
+    expect(policy).not.toHaveProperty("version");
+    const cliente = policy.tools.evo_meu_plano;
+    expect(cliente).toEqual({ scope: "customer", identityParam: "phone" });
+    expect(JSON.stringify(policy)).not.toContain("identity_param");
   });
 
   it("a policy acompanha o recorte: não descreve consulta que o tenant não anuncia", () => {
