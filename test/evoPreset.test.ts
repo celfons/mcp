@@ -77,6 +77,35 @@ describe("o preset emite um manifesto que o esquema aceita", () => {
     }
   });
 
+  it("A REGRA: ou fala do cliente que perguntou, ou é plano e preço — não há terceira classe", () => {
+    // Esta é a fronteira do produto, e ela é mais estreita do que "é GET".
+    //
+    // Duas classes, e só duas:
+    //   (a) `customer` — a resposta fala da pessoa amarrada ao telefone
+    //       verificado. O que é dela, ela pode ver;
+    //   (b) `business` — SÓ a tabela de preço. Plano e serviço, com valor.
+    //
+    // O que ficou de fora não ficou por ser perigoso: grade de aulas,
+    // modalidades, endereço, horário, convênios e a loja são todos inofensivos.
+    // Ficaram de fora porque a regra é uma allowlist, e allowlist que aceita
+    // "isso também é inofensivo" deixa de ser allowlist em três meses. Fora
+    // isso, quase tudo dessa lista é quase estático — mora mais barato no
+    // contexto que o dono escreve no portal, sem custar uma consulta viva e uma
+    // chamada de LLM por turno.
+    //
+    // Consulta nova de negócio: ou entra nesta lista com o preço no meio, ou
+    // não entra.
+    const PRECO = ["/api/v3/membership", "/api/v1/service"];
+
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+
+    for (const tool of built.manifest.tools) {
+      if (tool.scope === "customer") continue;
+      expect(PRECO).toContain(tool.path);
+    }
+  });
+
   it("nenhuma rota do INVENTÁRIO PROIBIDO entra no preset", () => {
     // "É GET, então é seguro" é a intuição errada, e a EVO tem os
     // contraexemplos prontos. Todas as rotas abaixo são GET, todas são leitura
@@ -240,12 +269,7 @@ describe("recorte por classe de consulta", () => {
 
     expect(built.manifest.tools.map((t) => t.name)).toEqual([
       "evo_planos_e_precos",
-      "evo_servicos_e_precos",
-      "evo_produtos",
-      "evo_convenios",
-      "evo_grade_de_aulas",
-      "evo_modalidades",
-      "evo_unidade"
+      "evo_servicos_e_precos"
     ]);
   });
 
@@ -267,7 +291,7 @@ describe("recorte por classe de consulta", () => {
   it("o default continua sendo tudo — o recorte é opt-in", () => {
     const todas = preset();
     if (!todas.ok) throw new Error(todas.error);
-    expect(todas.manifest.tools.length).toBe(13);
+    expect(todas.manifest.tools.length).toBe(8);
     expect(todas.manifest.tools.some((t) => t.scope === "customer")).toBe(true);
     expect(preset({ include: "all" }).ok).toBe(true);
   });
@@ -388,20 +412,23 @@ describe("as ferramentas contra respostas no formato real da EVO", () => {
     expect(linhas).toHaveLength(2);
   });
 
-  it("evo_grade_de_aulas é business: consulta sem identidade nenhuma", async () => {
+  it("evo_servicos_e_precos é business: consulta sem identidade nenhuma", () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(json([{ name: "Spinning", activityDate: "2026-08-07", startTime: "07:00", instructor: "Léo", capacity: 20, ocupation: 12 }]));
+      .mockResolvedValue(json([{ nameService: "Avaliação física", value: 80, maxAmountInstallments: 1 }]));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await runTool(manifest!, tool("evo_grade_de_aulas"), { date: "2026-08-07" });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = fetchMock.mock.calls[0][0] as string;
-    expect(url).toContain("onlyAvailables=true");
-    expect(url).toContain("date=2026-08-07");
-    expect(url).not.toContain("phone");
-    expect(result.content[0].text).toContain("Aula: Spinning");
+    return runTool(manifest!, tool("evo_servicos_e_precos"), { name: "avalia" }).then((result) => {
+      // Um salto só, e nenhum telefone no fio: consulta de negócio não fala de
+      // pessoa alguma, então não há a quem amarrar nem o que resolver.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain("active=true");
+      expect(url).toContain("name=avalia");
+      expect(url).not.toContain("phone");
+      expect(url).not.toContain("idMember");
+      expect(result.content[0].text).toContain("Serviço: Avaliação física");
+    });
   });
 
   it("aluno sem cadastro na EVO não vira consulta ao financeiro da academia inteira", async () => {
