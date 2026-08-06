@@ -80,6 +80,34 @@ O índice guarda o **hash** do token, não o token: um dump do KV não vira um c
 }
 ```
 
+### Onde este Worker atende — confira ANTES de cadastrar
+
+O host que você usa tem de ser um que chegue **a este Worker**. Isso não é
+subentendido: `mcp.closing.trade` **não** é este Worker — é um portal MCP protegido por
+OAuth, e ele responde `401 invalid_token` em `/mcp*` e `404` em todo o resto, sem nunca
+encostar aqui. Cadastrar contra ele falha em silêncio duas vezes: a rota admin dá 404, e
+a plataforma, que manda `Authorization: Bearer <token do tenant>`, é recusada pelo portal
+como token OAuth inválido.
+
+Descubra o host certo no dashboard: **Workers & Pages → `mcp-social` → Settings →
+Domains & Routes**. Sem `routes` no `wrangler.jsonc` e sem `workers_dev: false`, existe
+uma URL `mcp-social.<subdomínio-da-conta>.workers.dev` que já funciona hoje. Para um host
+bonito, adicione um **Custom Domain** ao Worker (ex.: `gateway.closing.trade`) — não
+tente rotear um subpath de `mcp.closing.trade`, que já pertence ao portal.
+
+Teste de um comando (`$GATEWAY` = o host candidato):
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$GATEWAY/mcp/naoexiste"
+```
+
+- **`404 application/json`** → chegou no Worker. É este host.
+- `401` com `WWW-Authenticate: Bearer realm="OAuth"` → é o portal, não o Worker.
+- `404 text/plain` → não chegou em Worker nenhum.
+
+Nas duas superfícies, use o MESMO host: a rota `/admin/*` e a URL que a plataforma
+guarda em `tenant_mcp_servers` são o mesmo Worker.
+
 Cadastrar:
 
 O namespace já existe e o binding está declarado em `wrangler.jsonc`.
@@ -91,7 +119,7 @@ O namespace já existe e o binding está declarado em `wrangler.jsonc`.
 antes de gravar e grava as duas chaves de uma vez:
 
 ```bash
-curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_1/manifest \
+curl -X PUT $GATEWAY/admin/tenants/tnt_1/manifest \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "manifest": { ... }, "token": "<token-que-a-plataforma-vai-usar>" }'
@@ -113,7 +141,7 @@ npx wrangler kv key put --binding=TENANT_MANIFESTS "tenant-token:<sha256-do-toke
 ```
 
 Do lado da plataforma, a linha em `tenant_mcp_servers` aponta para
-`https://mcp.closing.trade/mcp/tenant` com `Authorization: Bearer <token>`, e o `tool_policy`
+`$GATEWAY/mcp/tenant` com `Authorization: Bearer <token>`, e o `tool_policy`
 classifica cada ferramenta com o MESMO escopo declarado aqui.
 
 ### O que o manifesto obriga, e por quê
@@ -226,7 +254,7 @@ mesmo. Ativar uma academia vira três campos.
 **1 · No gateway** (aqui):
 
 ```bash
-curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_gym/preset/evo \
+curl -X PUT $GATEWAY/admin/tenants/tnt_gym/preset/evo \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -273,7 +301,7 @@ anuncia.
 curl -X POST https://<plataforma>/api/admin/tenants/tnt_gym/mcp-server \
   -H "x-admin-key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
   -d '{ "label": "EVO",
-        "url": "https://mcp.closing.trade/mcp/tenant",
+        "url": "'$GATEWAY'/mcp/tenant",
         "authHeader": "Bearer <o-mesmo-token-acima>",
         "toolPolicy": { "tools": { ... } } }'
 ```
