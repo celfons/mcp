@@ -299,13 +299,8 @@ tradução manual e a promessa de "colável" seria falsa.
 | `evo_minhas_aulas` | customer | `GET /api/v1/activities/schedule` | → `idMember` |
 | `evo_planos_e_precos` | business | `GET /api/v3/membership` | — |
 | `evo_servicos_e_precos` | business | `GET /api/v1/service` | — |
-| `evo_produtos` | business | `GET /api/v1/product` | — |
-| `evo_convenios` | business | `GET /api/v1/partnership` | — |
-| `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` | — |
-| `evo_modalidades` | business | `GET /api/v1/activities` | — |
-| `evo_unidade` | business | `GET /api/v1/configuration` | — |
 
-Com `"include": "business"`, só as sete últimas são anunciadas.
+Com `"include": "business"`, só as duas últimas são anunciadas.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.
@@ -314,6 +309,18 @@ O preset usa `/api/v1/members/basic`, **não** `/api/v2/members`: o v2 devolve `
 `document`, `address`, `zipCode`, `birthDate` e `photoUrl`. Projeção estreita protege o
 prompt, mas o que não sai da EVO não precisa de projeção — é uma camada de PII a menos
 atravessando o fio.
+
+### A regra: duas classes, e não há terceira
+
+**(a) fala do cliente que perguntou, ou (b) é plano e preço.** É uma allowlist, e o que
+está fora não está fora por ser perigoso — grade de aulas, modalidades, endereço, horário
+e convênios são todos inofensivos. Estão fora porque allowlist que aceita "isso também é
+inofensivo" deixa de ser allowlist em três meses. E porque quase tudo dessa lista é
+**quase estático**: mora mais barato no contexto que o dono escreve no portal do agente,
+sem custar uma consulta viva e uma chamada de LLM por turno.
+
+`tests/evoPreset.test.ts` codifica a regra: consulta `business` cujo caminho não está na
+lista de preço quebra o CI.
 
 ### Por que não "todo GET"
 
