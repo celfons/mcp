@@ -251,6 +251,47 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
         maxChars: 1200
       },
       {
+        name: "evo_meus_servicos",
+        description: "Serviços que o aluno contratou além do plano (avaliação, personal, day use).",
+        path: "/api/v1/members/services",
+        scope: "customer",
+        identityParam: IDENTITY_PARAM_NAME,
+        params: [IDENTITY_PARAM],
+        query: { ...branch },
+        resolve: memberResolve("idMember"),
+        root: ["$"],
+        fields: [{ path: "[].nameService", label: "Serviço" }],
+        maxChars: 600
+      },
+      {
+        name: "evo_minha_frequencia",
+        description: "Quando o aluno entrou na academia — histórico de acessos dele.",
+        path: "/api/v1/entries",
+        scope: "customer",
+        identityParam: IDENTITY_PARAM_NAME,
+        params: [
+          IDENTITY_PARAM,
+          {
+            name: "registerDateStart",
+            in: "query",
+            description: "Início do período no formato AAAA-MM-DD, quando o cliente citar um."
+          }
+        ],
+        query: { take: "20" },
+        resolve: memberResolve("idMember"),
+        root: ["$"],
+        // `EntradasResumoApiViewModel` traz `nameMember`, `nameProspect` e
+        // `nameEmployee`, e sem `idMember` esta rota devolve as entradas de TODO
+        // MUNDO com nome. A resolução garante o filtro; não projetar os nomes é
+        // a segunda camada — é o histórico do próprio dono do telefone, então
+        // nenhum nome precisa viajar para a resposta fazer sentido.
+        fields: [
+          { path: "[].date", label: "Entrada" },
+          { path: "[].entryType", label: "Tipo" }
+        ],
+        maxChars: 900
+      },
+      {
         name: "evo_minhas_aulas",
         description: "Aulas em que o aluno está inscrito, com data, horário e professor.",
         path: "/api/v1/activities/schedule",
@@ -306,6 +347,44 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
         maxChars: 1200
+      },
+      {
+        name: "evo_produtos",
+        description: "Produtos vendidos na loja da academia (suplementos, acessórios) e seus preços.",
+        path: "/api/v1/product",
+        scope: "business",
+        params: [
+          { name: "name", in: "query", description: "Filtra produtos por nome, quando o cliente citar um." }
+        ],
+        // `onlySellable` corta o que não está à venda; a quantidade em estoque
+        // NÃO é projetada — é número de operação, não resposta a cliente.
+        query: { active: "true", onlySellable: "true", take: "20", ...branch },
+        root: ["$"],
+        fields: [
+          { path: "[].nameProduct", label: "Produto" },
+          { path: "[].value", label: "Valor" }
+        ],
+        maxChars: 1200
+      },
+      {
+        name: "evo_convenios",
+        description: "Convênios e parcerias que a academia aceita (Gympass, TotalPass, empresas).",
+        path: "/api/v1/partnership",
+        scope: "business",
+        params: [],
+        query: {},
+        root: ["$"],
+        // `discount` e `advancedDiscount` NÃO são projetados: a taxa negociada
+        // com um parceiro é informação comercial do dono, e a pergunta do
+        // cliente ("vocês aceitam Gympass?") se responde com o nome.
+        // `isInactiveFlag` viaja para o modelo não anunciar convênio encerrado —
+        // a rota aceita um filtro `status`, mas o vocabulário dele não está no
+        // swagger; pinar às cegas seria esconder metade da lista.
+        fields: [
+          { path: "[].description", label: "Convênio" },
+          { path: "[].isInactiveFlag", label: "Encerrado" }
+        ],
+        maxChars: 900
       },
       {
         name: "evo_grade_de_aulas",

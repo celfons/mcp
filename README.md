@@ -294,14 +294,18 @@ tradução manual e a promessa de "colável" seria falsa.
 | `evo_meu_cadastro` | customer | `GET /api/v1/members/basic` | — |
 | `evo_meu_plano` | customer | `GET /api/v1/members/basic` | — |
 | `evo_minhas_cobrancas` | customer | `GET /api/v1/receivables` | → `memberId` |
+| `evo_meus_servicos` | customer | `GET /api/v1/members/services` | → `idMember` |
+| `evo_minha_frequencia` | customer | `GET /api/v1/entries` | → `idMember` |
 | `evo_minhas_aulas` | customer | `GET /api/v1/activities/schedule` | → `idMember` |
 | `evo_planos_e_precos` | business | `GET /api/v3/membership` | — |
 | `evo_servicos_e_precos` | business | `GET /api/v1/service` | — |
+| `evo_produtos` | business | `GET /api/v1/product` | — |
+| `evo_convenios` | business | `GET /api/v1/partnership` | — |
 | `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` | — |
 | `evo_modalidades` | business | `GET /api/v1/activities` | — |
 | `evo_unidade` | business | `GET /api/v1/configuration` | — |
 
-Com `"include": "business"`, só as cinco últimas são anunciadas.
+Com `"include": "business"`, só as sete últimas são anunciadas.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.
@@ -310,6 +314,32 @@ O preset usa `/api/v1/members/basic`, **não** `/api/v2/members`: o v2 devolve `
 `document`, `address`, `zipCode`, `birthDate` e `photoUrl`. Projeção estreita protege o
 prompt, mas o que não sai da EVO não precisa de projeção — é uma camada de PII a menos
 atravessando o fio.
+
+### Por que não "todo GET"
+
+A EVO tem ~80 rotas de leitura, e a tentação de expor todas é grande — leitura não
+estraga nada, certo? Não: **o verbo não classifica nada. Quem aparece na resposta
+classifica.** Três GETs da própria EVO bastam para mostrar:
+
+- `GET /api/v1/members/resetPassword` devolve **link de redefinição de senha**. É leitura
+  em HTTP e entrega a conta de alguém.
+- `GET /api/v1/receivables/debtors` é a **lista de inadimplentes da academia inteira**,
+  com nome.
+- `GET /api/v1/pix/qr-code` **gera cobrança** — efeito no mundo, verbo de leitura.
+
+E há uma armadilha mais silenciosa: `/api/v1/receivables`, `/api/v1/entries` e
+`/api/v1/members/services` respondem pela academia inteira **quando o filtro de aluno
+falta**. São exatamente as que usam `resolve`, e é por isso que a resolução vazia
+**aborta** em vez de seguir sem a chave.
+
+Rota nova passa por duas perguntas, nesta ordem:
+
+1. A resposta fala de **uma** pessoa amarrada ao telefone verificado, ou do negócio?
+2. Se for do negócio — o dono poria isso na **vitrine**?
+
+Custo negociado com parceiro, estoque, centro de custo, conta bancária e base de clientes
+reprovam na segunda. `tests/evoPreset.test.ts` carrega o **inventário fechado** das rotas
+proibidas: acrescentar uma delas quebra o CI.
 
 ### O que o preset deliberadamente não faz
 
