@@ -1,5 +1,6 @@
-import { parseManifest } from "./manifest";
+import { parseManifest, type TenantManifest } from "./manifest";
 import { hashToken } from "./store";
+import { buildEvoManifest, evoToolPolicy } from "./presets/evo";
 
 /**
  * A rota de administração dos manifestos.
@@ -102,15 +103,107 @@ export async function putManifest(
     return json(400, { error: "O token precisa ter ao menos 16 caracteres." });
   }
 
-  await kv.put(`${MANIFEST_PREFIX}${tenantId}`, JSON.stringify(parsed.manifest));
-  if (token) {
-    await kv.put(`${TOKEN_PREFIX}${await hashToken(token)}`, tenantId);
-  }
+  await persist(kv, parsed.manifest, token);
 
   return json(200, {
     tenantId,
     tools: parsed.manifest.tools.map((t) => ({ name: t.name, scope: t.scope })),
     tokenIndexed: Boolean(token)
+  });
+}
+
+/**
+ * Grava manifesto + índice do token. Extraído de `putManifest` quando o preset
+ * passou a ser um segundo produtor de manifesto: um caminho de gravação
+ * duplicado é como as duas chaves acabam gravadas em ordens diferentes.
+ */
+async function persist(
+  kv: KVNamespace,
+  manifest: TenantManifest,
+  token: string
+): Promise<void> {
+  await kv.put(`${MANIFEST_PREFIX}${manifest.tenantId}`, JSON.stringify(manifest));
+  if (token) await kv.put(`${TOKEN_PREFIX}${await hashToken(token)}`, manifest.tenantId);
+}
+
+export type EvoPresetBody = {
+  dns?: unknown;
+  secretKey?: unknown;
+  idBranch?: unknown;
+  label?: unknown;
+  token?: unknown;
+};
+
+/**
+ * `PUT /admin/tenants/:tenantId/preset/evo`
+ *
+ * Ativa uma academia em três campos, em vez de um manifesto de 250 linhas
+ * colado à mão. O manifesto é GERADO e validado pelo mesmo `parseManifest` da
+ * rota irmã — o preset não é um caminho de gravação paralelo, é um gerador de
+ * entrada para o mesmo.
+ *
+ * A resposta devolve a `tool_policy` que a plataforma precisa gravar em
+ * `tenant_mcp_servers`. Ela vem daqui porque os dois documentos têm de
+ * concordar e moram em repositórios diferentes: uma ferramenta anunciada aqui e
+ * não classificada lá nasce inchamável (`unclassified`), e o dono só descobre
+ * pela métrica de degradação. Devolvê-la pronta tira a transcrição manual do
+ * caminho da ativação.
+ */
+export async function putEvoPreset(
+  request: Request,
+  env: Env,
+  tenantId: string
+): Promise<AdminResult> {
+  const denied = authorize(request, env);
+  if (denied) return denied;
+
+  const kv = store(env);
+  if (!kv) return json(503, { error: "KV de manifestos não está configurado." });
+  if (!tenantId) return json(400, { error: "tenantId é obrigatório." });
+
+  let body: EvoPresetBody;
+  try {
+    body = (await request.json()) as EvoPresetBody;
+  } catch {
+    return json(400, { error: "Corpo não é JSON válido." });
+  }
+
+  const dns = typeof body.dns === "string" ? body.dns.trim() : "";
+  const secretKey = typeof body.secretKey === "string" ? body.secretKey.trim() : "";
+  if (!dns || !secretKey) {
+    return json(400, { error: "dns e secretKey da EVO são obrigatórios." });
+  }
+  if (body.idBranch !== undefined && !Number.isInteger(body.idBranch)) {
+    return json(400, { error: "idBranch, quando informado, precisa ser inteiro." });
+  }
+
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  if (body.token !== undefined && token.length < 16) {
+    return json(400, { error: "O token precisa ter ao menos 16 caracteres." });
+  }
+
+  const built = buildEvoManifest({
+    tenantId,
+    dns,
+    secretKey,
+    ...(typeof body.label === "string" ? { label: body.label } : {}),
+    ...(typeof body.idBranch === "number" ? { idBranch: body.idBranch } : {})
+  });
+  if (!built.ok) {
+    // Só acontece se o próprio preset regredir. Recusar com nome é melhor do que
+    // gravar um manifesto que o gateway depois recusa na leitura.
+    return json(500, { error: `Preset EVO inválido — ${built.error}` });
+  }
+
+  await persist(kv, built.manifest, token);
+
+  return json(200, {
+    tenantId,
+    preset: "evo",
+    tools: built.manifest.tools.map((t) => ({ name: t.name, scope: t.scope })),
+    tokenIndexed: Boolean(token),
+    // Para colar em `PUT /api/admin/tenants/{tenantId}/mcp-server` da plataforma.
+    toolPolicy: evoToolPolicy()
   });
 }
 

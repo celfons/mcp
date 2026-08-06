@@ -11,7 +11,7 @@ import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
 import { registerTenantTools } from "./tenant/gateway";
 import { resolveTenant, type ResolvedTenant } from "./tenant/store";
-import { putManifest, deleteManifest, getManifest } from "./tenant/admin";
+import { putManifest, deleteManifest, getManifest, putEvoPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
 
@@ -187,6 +187,24 @@ export default {
   async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     const path = pathname.replace(/\/+$/, "") || "/mcp";
+
+    // Ativação por PRESET: o manifesto é gerado de um punhado de campos, para a
+    // API que muitos tenants compartilham. Casa antes da rota de manifesto
+    // porque é mais específica.
+    const preset = /^\/admin\/tenants\/([^/]+)\/preset\/([a-z0-9-]+)$/.exec(path);
+    if (preset) {
+      const tenantId = decodeURIComponent(preset[1]);
+      const result =
+        request.method !== "PUT"
+          ? { status: 405, body: { error: "Método não suportado." } }
+          : preset[2] === "evo"
+            ? await putEvoPreset(request, env, tenantId)
+            : { status: 404, body: { error: `Preset "${preset[2]}" não existe.` } };
+      return new Response(JSON.stringify(result.body), {
+        status: result.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
 
     // Administração dos manifestos (celfons/whatsapp#1327). Fora do protocolo
     // MCP de propósito: quem chama aqui é o portal do operador, não um agente.

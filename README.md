@@ -142,6 +142,58 @@ classifica cada ferramenta com o MESMO escopo declarado aqui.
 - Manifesto inválido é recusado **inteiro**: meio manifesto aplicado é uma ferramenta
   que some sem ninguém notar.
 
+### Quando a API do cliente não fala a língua da plataforma
+
+Quatro campos opcionais existem porque, sem eles, boa parte das APIs reais fica
+inexprimível — não por elegância.
+
+- **`transform`** no parâmetro (`"digits"` · `"br_local"`). A plataforma escreve no
+  `identityParam` o `wa_id` da Meta: E.164 em dígitos, com DDI (`5534999530186`). ERP
+  brasileiro guarda o telefone em formato **local**. Sem normalizar, a busca casa zero
+  registros — e nada quebra: o leg degrada em `empty_result` e o dono conclui que "não
+  funciona" sem nenhum sinal apontando a causa. `br_local` remove o DDI só quando o
+  número tem 12–13 dígitos e começa em `55` (a janela é o que impede um número de DDD 55
+  de perder dois dígitos).
+
+- **`query`** — pares fixos, do autor do manifesto, fora do alcance do modelo:
+  `{"idBranch": "7", "active": "true", "take": "20"}`. Pinar a unidade como *parâmetro*
+  seria deixar o modelo escolher a unidade a partir do texto do cliente.
+
+- **`root`** — onde, na resposta, mora o que a projeção deve ler, em candidatos.
+  `["list", "lista", "$"]` desce num envelope de paginação; `["[0]", "$"]` cobre
+  objeto-ou-lista quando o swagger do cliente diz uma coisa e a API faz outra. `"$"` é a
+  resposta inteira. Candidato que existe mas está **vazio** não conta como achado.
+
+- **`resolve`** — o salto `identidade verificada → chave interna`, feito pelo gateway
+  antes da consulta principal:
+
+  ```json
+  "resolve": {
+    "path": "/api/v1/members/basic",
+    "param": "phone",
+    "query": { "take": "1" },
+    "extract": ["[0].idMember", "idMember"],
+    "into": "memberId"
+  }
+  ```
+
+  Ele existe porque a plataforma só conhece o **telefone** (é o que ela verifica no
+  ingresso do canal) e a maioria das APIs keya por um id interno. Sem o salto, metade das
+  consultas escopadas por cliente é inexprimível.
+
+  O ADR-0036 proíbe **encadear ferramentas** — mas o que ele proíbe é o laço de decisão da
+  LLM (chamar → ler → decidir de novo). Daqui sai **um** `tools/call`; os dois saltos são
+  determinísticos e dividem o mesmo `timeoutMs`. E a amarra fica mais **forte**: o limite
+  conhecido nº 1 do ADR-0036 é que a plataforma prova o *envio* da identidade, não o
+  *respeito* a ela — com o salto, a chave é **derivada** do telefone verificado pelo
+  próprio gateway, e o modelo não tem como propô-la.
+
+  Três propriedades não são configuráveis, de propósito: o valor enviado é **sempre** o
+  `identityParam` (se houvesse campo para escolher outro, o modelo escolheria); `into` não
+  pode colidir com parâmetro nem com query fixa; e **resolução vazia aborta a
+  ferramenta** — a consulta principal não acontece, porque um `/receivables` sem
+  `memberId` devolveria o financeiro da academia inteira.
+
 ### O que este gateway assume como responsabilidade
 
 Ao viver fora da plataforma, ele perde o `INV-TENANT-SCOPE` e o guard estrutural que o
@@ -157,6 +209,106 @@ no prompt de um agente.
 **Limite conhecido:** um host que *resolve* para IP privado passa pela guarda (não há
 resolução de DNS antes do `fetch`). Rebind de DNS exigiria proxy com resolvedor próprio;
 está fora de escopo, e é melhor estar escrito do que subentendido.
+
+## Preset: EVO (academias)
+
+A EVO (W12) é o sistema de gestão que boa parte das academias usa. Ela é o oposto do caso
+que o manifesto por tenant atende: a API é **fixa e conhecida**, a mesma para todas as
+academias. Colar 250 linhas de JSON por academia produziria divergência entre clientes
+idênticos e nenhum lugar onde corrigir todo mundo quando a W12 mudar um campo.
+
+`src/tenant/presets/evo.ts` é esse lugar. Ele **gera** um manifesto e o passa pelo mesmo
+`parseManifest` — não é um caminho de gravação paralelo, é um gerador de entrada para o
+mesmo. Ativar uma academia vira três campos.
+
+### Ativar
+
+**1 · No gateway** (aqui):
+
+```bash
+curl -X PUT https://mcp.closing.trade/admin/tenants/tnt_gym/preset/evo \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "dns": "<dns-da-unidade-na-evo>",
+        "secretKey": "<secret-key-da-evo>",
+        "idBranch": 7,
+        "label": "Academia Centro",
+        "token": "<token-que-a-plataforma-vai-apresentar>"
+      }'
+```
+
+Auth da EVO é **Basic** (DNS como usuário, secret key como senha), montado aqui — o
+esquema do manifesto não precisa saber o que é Basic. A resposta traz a `tool_policy`
+pronta e **nunca** a credencial.
+
+**2 · Na plataforma** (`celfons/whatsapp`), cole a `tool_policy` que veio na resposta:
+
+```bash
+curl -X PUT https://<plataforma>/api/admin/tenants/tnt_gym/mcp-server \
+  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{ "label": "EVO",
+        "url": "https://mcp.closing.trade/mcp/tenant",
+        "authHeader": "Bearer <o-mesmo-token-acima>",
+        "toolPolicy": { ... } }'
+```
+
+Os dois documentos **têm de concordar**: uma ferramenta anunciada aqui e não classificada
+lá nasce inchamável (`unclassified`), e o dono só descobre pela métrica de degradação. Por
+isso a policy é **gerada**, não transcrita.
+
+### As ferramentas
+
+| Ferramenta | Escopo | Endpoint EVO | Salto |
+|---|---|---|---|
+| `evo_meu_cadastro` | customer | `GET /api/v1/members/basic` | — |
+| `evo_meu_plano` | customer | `GET /api/v1/members/basic` | — |
+| `evo_minhas_cobrancas` | customer | `GET /api/v1/receivables` | → `memberId` |
+| `evo_minhas_aulas` | customer | `GET /api/v1/activities/schedule` | → `idMember` |
+| `evo_planos_e_precos` | business | `GET /api/v3/membership` | — |
+| `evo_servicos_e_precos` | business | `GET /api/v1/service` | — |
+| `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` | — |
+| `evo_modalidades` | business | `GET /api/v1/activities` | — |
+| `evo_unidade` | business | `GET /api/v1/configuration` | — |
+
+`evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
+embutido na busca por telefone — uma consulta, e é o que a mantém barata.
+
+O preset usa `/api/v1/members/basic`, **não** `/api/v2/members`: o v2 devolve `cpf`,
+`document`, `address`, `zipCode`, `birthDate` e `photoUrl`. Projeção estreita protege o
+prompt, mas o que não sai da EVO não precisa de projeção — é uma camada de PII a menos
+atravessando o fio.
+
+### O que o preset deliberadamente não faz
+
+**Escrita.** Matricular em aula (`POST /activities/schedule/enroll`), criar prospect,
+agendar experimental — todos existem na EVO e nenhum entra aqui. O ADR-0036 §2.3 contrata
+**leitura**, e é essa contratação que dispensa reserva de idempotência: a entrega do turno
+é at-least-once, então um turno reentregue **repete a consulta**. Repetir leitura custa
+tempo; repetir matrícula cria duas. Escrita é outra feature, e ela reabre o P-3.
+
+### Verificar na ativação (não dá para saber do código)
+
+1. **Semântica do filtro `phone`** em `/members/basic`: exato, parcial, ignora máscara? Se
+   a academia guardar o número **com** DDI, o transform correto é `digits` — é uma linha
+   em `PHONE_TRANSFORM`. **É a suposição mais frágil do preset**, e a que falha em
+   silêncio: nenhuma consulta escopada acha ninguém, e nada fica vermelho. O sinal é
+   `empty_result` perto de 100% para aquele tenant, logo depois da ativação.
+2. **Latência p95** de `/members/basic` + `/receivables`: os dois saltos têm de caber nos
+   `3400 ms` do preset, que ficam abaixo do `MCP_TIMEOUT_MS` (4 s) da plataforma.
+3. **Rate limit** da API por token — não está documentado pela W12, e o agente consulta
+   por turno.
+4. **`idBranch`** numa rede multi-unidade: sem ele, a EVO responde pelo escopo do token.
+
+### O que não deve passar por aqui
+
+Preço de plano é a pergunta nº 1 de uma academia e a mais tentadora de pôr no MCP. Mas o
+ADR-0036 §2.4 proíbe cache entre turnos: `evo_planos_e_precos` seria chamado **em todo
+turno**, com uma chamada de LLM de seleção junto, para um dado que muda uma vez por
+semestre. Ele está aqui para quem quer o preço sempre vivo — mas contexto quase estático
+(tabela de preços, horário, modalidades) sai mais barato no portal do agente ou no RAG,
+que já são lastro e custam zero de latência. O MCP se paga no dado **vivo e por pessoa**:
+situação do contrato, cobrança em aberto, aula agendada, vaga de hoje.
 
 ## Tools
 
@@ -346,14 +498,19 @@ src/
     google-analytics.ts ga4_* tools
     env.d.ts           secret/var types
   tenant/
-    manifest.ts        esquema do manifesto (a fronteira do gateway)
+    manifest.ts        esquema do manifesto (a fronteira do gateway) + transforms
     store.ts           KV: token -> tenant -> manifesto (o isolamento mora aqui)
     safeUrl.ts         SSRF: destino verificado, sem redirect, corpo com teto
-    project.ts         resposta do cliente -> só os campos declarados
-    gateway.ts         manifesto -> ferramentas MCP
+    project.ts         resposta do cliente -> só os campos declarados; raiz por candidatos
+    gateway.ts         manifesto -> ferramentas MCP; o salto de resolução
+    admin.ts           rotas de manifesto e de preset
+    presets/evo.ts     EVO (academias): manifesto gerado + a tool_policy da plataforma
   client.tsx           browser tool tester
 test/
   tenantGateway.test.ts  isolamento, manifesto, SSRF, projeção, execução
+  tenantResolve.test.ts  salto de resolução, transform, raiz, query fixa
+  tenantAdmin.test.ts    rotas admin de manifesto e de preset
+  evoPreset.test.ts      o preset da EVO e o acordo com a tool_policy
 ```
 
 Testes: `npm test` (vitest).
