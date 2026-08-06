@@ -1,4 +1,4 @@
-import type { FieldSchema } from "./manifest";
+import { ROOT_SELF, type FieldSchema } from "./manifest";
 import type { z } from "zod";
 
 type Field = z.infer<typeof FieldSchema>;
@@ -52,6 +52,42 @@ function formatValue(value: unknown): string | null {
   if (typeof value === "string") return value.trim() || null;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return null;
+}
+
+/**
+ * Lê UM escalar num caminho. É o que o salto de resolução usa para tirar a chave
+ * interna da resposta: estrutura não serve, porque o que sai daqui vai virar
+ * valor de query na consulta seguinte.
+ */
+export function readScalar(source: unknown, path: string): string | null {
+  return formatValue(path === ROOT_SELF ? source : readPath(source, path));
+}
+
+/**
+ * Escolhe, entre os candidatos, onde a projeção deve ler.
+ *
+ * Candidatos e não caminho único porque a forma da resposta do cliente às vezes
+ * não é conhecível de antemão: o swagger da EVO declara `/members/basic` como
+ * objeto e a busca paginada devolve lista, e `/receivables` embrulha em `list`
+ * num lugar e `lista` noutro. `["[0]", "$"]` cobre objeto-ou-lista numa linha,
+ * em vez de exigir dois manifestos ou adivinhação em runtime.
+ *
+ * Lista VAZIA não conta como achado — senão `["list", "lista"]` pararia no
+ * primeiro que existe e estiver vazio, e o candidato que tinha o dado nunca
+ * seria tentado.
+ */
+export function resolveProjectionRoot(
+  payload: unknown,
+  roots?: readonly string[]
+): unknown {
+  if (!roots || roots.length === 0) return payload;
+  for (const candidate of roots) {
+    const value = candidate === ROOT_SELF ? payload : readPath(payload, candidate);
+    if (value === null || value === undefined) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    return value;
+  }
+  return undefined;
 }
 
 export type ProjectionResult = {
