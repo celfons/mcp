@@ -77,6 +77,77 @@ describe("o preset emite um manifesto que o esquema aceita", () => {
     }
   });
 
+  it("nenhuma rota do INVENTÁRIO PROIBIDO entra no preset", () => {
+    // "É GET, então é seguro" é a intuição errada, e a EVO tem os
+    // contraexemplos prontos. Todas as rotas abaixo são GET, todas são leitura
+    // em HTTP, e nenhuma pode chegar perto do prompt de um agente que fala com
+    // um cliente. O verbo não classifica nada — quem aparece na RESPOSTA
+    // classifica.
+    //
+    // Este inventário é fechado e existe para o dia em que alguém quiser
+    // "aproveitar que já está integrado". Uma rota nova só entra depois de
+    // passar pelas duas perguntas: a resposta fala de UMA pessoa amarrada ao
+    // telefone verificado, ou fala do negócio? E, se for do negócio, o dono
+    // poria isso na vitrine?
+    const PROIBIDAS = [
+      // Devolve link de redefinição de senha. É GET, e entrega a conta de alguém.
+      "/api/v1/members/resetPassword",
+      // Lista de inadimplentes da academia inteira, com nome.
+      "/api/v1/receivables/debtors",
+      // Cartões de crédito do aluno.
+      "/creditcard",
+      // Cupons de desconto — o agente distribuiria os códigos.
+      "/api/v1/voucher",
+      // Base de clientes inteira.
+      "/api/v2/management/activeclients",
+      "/api/v2/management/not-renewed",
+      "/api/v2/management/prospects",
+      "/api/v2/members/active-members",
+      // Financeiro e operação do dono: contas a pagar, bancos, centros de custo.
+      "/api/v1/payables",
+      "/api/v1/bank-accounts",
+      "/api/v1/costcenter",
+      "/api/v1/revenuecenter",
+      "/api/v1/receivables/receivables-conciliation",
+      // Funcionários e permissões.
+      "/api/v2/employees",
+      "/api/v1/employees/permissions",
+      // Credenciais e configuração de cobrança.
+      "/api/v1/configuration/gateway-form-token",
+      "/api/v2/configuration/gateway",
+      "/api/v2/webhook",
+      // GET que gera cobrança — leitura no verbo, efeito no mundo.
+      "/api/v1/pix/qr-code",
+      // Ficha completa: cpf, documento, endereço, nascimento, foto.
+      "/api/v2/members"
+    ];
+
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    const rotas = built.manifest.tools.flatMap((t) => [t.path, t.resolve?.path ?? ""]);
+
+    for (const proibida of PROIBIDAS) {
+      expect(rotas.filter((r) => r.includes(proibida))).toEqual([]);
+    }
+  });
+
+  it("toda consulta que a EVO devolveria SEM filtro é amarrada ou não existe", () => {
+    // `/receivables` e `/entries` respondem pela academia inteira quando o
+    // filtro de aluno falta. A regra estrutural: consulta `customer` que não
+    // consegue ser endereçada pelo telefone TEM de resolver — e a resolução
+    // aborta quando não acha, então não há caminho em que a consulta saia sem
+    // amarra.
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+
+    const semFiltroDevolveTudo = ["/api/v1/receivables", "/api/v1/entries", "/api/v1/members/services"];
+    for (const tool of built.manifest.tools) {
+      if (!semFiltroDevolveTudo.includes(tool.path)) continue;
+      expect(tool.scope).toBe("customer");
+      expect(tool.resolve).toBeDefined();
+    }
+  });
+
   it("não vaza PII que a consulta não precisa", () => {
     // `/api/v2/members` devolveria cpf, document, address, zipCode, birthDate e
     // photoUrl. O preset usa `/members/basic`, que não os tem — e nenhum campo
@@ -170,6 +241,8 @@ describe("recorte por classe de consulta", () => {
     expect(built.manifest.tools.map((t) => t.name)).toEqual([
       "evo_planos_e_precos",
       "evo_servicos_e_precos",
+      "evo_produtos",
+      "evo_convenios",
       "evo_grade_de_aulas",
       "evo_modalidades",
       "evo_unidade"
@@ -194,7 +267,7 @@ describe("recorte por classe de consulta", () => {
   it("o default continua sendo tudo — o recorte é opt-in", () => {
     const todas = preset();
     if (!todas.ok) throw new Error(todas.error);
-    expect(todas.manifest.tools.length).toBe(9);
+    expect(todas.manifest.tools.length).toBe(13);
     expect(todas.manifest.tools.some((t) => t.scope === "customer")).toBe(true);
     expect(preset({ include: "all" }).ok).toBe(true);
   });
