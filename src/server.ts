@@ -11,7 +11,7 @@ import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
 import { registerTenantTools } from "./tenant/gateway";
 import { resolveTenant, type ResolvedTenant } from "./tenant/store";
-import { putManifest, deleteManifest, getManifest, putEvoPreset } from "./tenant/admin";
+import { putManifest, deleteManifest, getManifest, putEvoPreset, putCarroPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
 
@@ -199,7 +199,9 @@ export default {
           ? { status: 405, body: { error: "Método não suportado." } }
           : preset[2] === "evo"
             ? await putEvoPreset(request, env, tenantId)
-            : { status: 404, body: { error: `Preset "${preset[2]}" não existe.` } };
+            : preset[2] === "carro"
+              ? await putCarroPreset(request, env, tenantId)
+              : { status: 404, body: { error: `Preset "${preset[2]}" não existe.` } };
       return new Response(JSON.stringify(result.body), {
         status: result.status,
         headers: { "Content-Type": "application/json" }

@@ -1,6 +1,7 @@
 import { parseManifest, type TenantManifest } from "./manifest";
 import { hashToken } from "./store";
 import { buildEvoManifest, evoToolPolicy } from "./presets/evo";
+import { buildCarroManifest, carroToolPolicy } from "./presets/carro";
 
 /**
  * A rota de administração dos manifestos.
@@ -219,6 +220,88 @@ export async function putEvoPreset(
     // Derivada do manifesto que acabou de ser gravado, então ela nunca descreve
     // uma consulta que aquele tenant não anuncia.
     toolPolicy: evoToolPolicy(built.manifest)
+  });
+}
+
+export type CarroPresetBody = {
+  /** O `CHATBOT_TOKEN` do carro — a credencial do atendimento na API de lá. */
+  chatbotToken?: unknown;
+  label?: unknown;
+  token?: unknown;
+  /** Host alternativo do carro (um ambiente de teste). Ausente = produção. */
+  baseUrl?: unknown;
+};
+
+/**
+ * `PUT /admin/tenants/:tenantId/preset/carro`
+ *
+ * Ativa a ponte entre o marketplace de carros (`celfons/carro`) e a plataforma
+ * de agentes em UM campo: o `CHATBOT_TOKEN`. O manifesto é GERADO e validado
+ * pelo mesmo `parseManifest` das rotas irmãs — o preset não é um caminho de
+ * gravação paralelo, é um gerador de entrada para o mesmo.
+ *
+ * A resposta devolve a `tool_policy` pronta para colar do outro lado, pela mesma
+ * razão da rota da EVO: os dois documentos moram em repositórios diferentes e
+ * têm de concordar, e transcrever à mão é como uma ferramenta acaba
+ * `unclassified` e inchamável sem ninguém ver.
+ */
+export async function putCarroPreset(
+  request: Request,
+  env: Env,
+  tenantId: string
+): Promise<AdminResult> {
+  const denied = authorize(request, env);
+  if (denied) return denied;
+
+  const kv = store(env);
+  if (!kv) return json(503, { error: "KV de manifestos não está configurado." });
+  if (!tenantId) return json(400, { error: "tenantId é obrigatório." });
+
+  let body: CarroPresetBody;
+  try {
+    body = (await request.json()) as CarroPresetBody;
+  } catch {
+    return json(400, { error: "Corpo não é JSON válido." });
+  }
+
+  // Sem a credencial, a rota de leitura do carro nega tudo (`CHATBOT_TOKEN`
+  // vazio lá é fail-closed, nunca "aceita porque não há segredo"). Gravar assim
+  // cadastraria um tenant cujas consultas todas respondem 401 — um cadastro que
+  // parece bem-sucedido e não funciona.
+  const chatbotToken = typeof body.chatbotToken === "string" ? body.chatbotToken.trim() : "";
+  if (!chatbotToken) {
+    return json(400, { error: "chatbotToken (o CHATBOT_TOKEN do carro) é obrigatório." });
+  }
+
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  if (body.token !== undefined && token.length < 16) {
+    return json(400, { error: "O token precisa ter ao menos 16 caracteres." });
+  }
+
+  const built = buildCarroManifest({
+    tenantId,
+    chatbotToken,
+    ...(typeof body.label === "string" ? { label: body.label } : {}),
+    ...(typeof body.baseUrl === "string" ? { baseUrl: body.baseUrl } : {})
+  });
+  if (!built.ok) {
+    // Só acontece se o próprio preset regredir — ou se um `baseUrl` inválido
+    // vier no corpo. Recusar com nome é melhor do que gravar um manifesto que o
+    // gateway depois recusa na leitura.
+    return json(500, { error: `Preset do carro inválido — ${built.error}` });
+  }
+
+  await persist(kv, built.manifest, token);
+
+  return json(200, {
+    tenantId,
+    preset: "carro",
+    tools: built.manifest.tools.map((t) => ({ name: t.name, scope: t.scope })),
+    tokenIndexed: Boolean(token),
+    // Para colar em `PUT /api/admin/tenants/{tenantId}/mcp-server` da
+    // plataforma. Derivada do manifesto que acabou de ser gravado, então ela
+    // nunca descreve uma consulta que aquele tenant não anuncia.
+    toolPolicy: carroToolPolicy(built.manifest)
   });
 }
 

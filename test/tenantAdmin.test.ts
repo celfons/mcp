@@ -1,7 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { putManifest, deleteManifest, getManifest, secretsMatch, putEvoPreset } from "../src/tenant/admin";
+import {
+  putManifest,
+  deleteManifest,
+  getManifest,
+  secretsMatch,
+  putEvoPreset,
+  putCarroPreset
+} from "../src/tenant/admin";
 import { parseManifest } from "../src/tenant/manifest";
 import { hashToken } from "../src/tenant/store";
+import worker from "../src/server";
 
 // ---------------------------------------------------------------------------
 // A rota de administração dos manifestos (celfons/whatsapp#1327).
@@ -339,5 +347,184 @@ describe("recorte por classe na rota de preset", () => {
     const body = result.body as { include: string; tools: Array<{ scope: string }> };
     expect(body.include).toBe("all");
     expect(body.tools.some((t) => t.scope === "customer")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A rota de PRESET do CARRO (`PUT /admin/tenants/:id/preset/carro`).
+//
+// Mesmo contrato da irmã da EVO — atalho de ATIVAÇÃO, nunca caminho de gravação
+// paralelo — com um risco a mais que é próprio dela: ela guarda o
+// `CHATBOT_TOKEN` do carro, a credencial que abre a leitura do lead. Uma
+// resposta que a devolvesse a poria em log de operador, em histórico de terminal
+// e em print de tela.
+// ---------------------------------------------------------------------------
+
+const carroReq = (body: unknown, token: string | null = ADMIN) =>
+  new Request("https://gw.test/admin/tenants/tnt_carro/preset/carro", {
+    method: "PUT",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: JSON.stringify(body)
+  });
+
+const CHATBOT_TOKEN = "token-do-chatbot-do-carro";
+const CARRO_BODY = { chatbotToken: CHATBOT_TOKEN, token: TOKEN };
+
+describe("ativação por preset do CARRO", () => {
+  it("grava manifesto e índice do token, e devolve a tool_policy da plataforma", async () => {
+    const kv = fakeKv();
+    const result = await putCarroPreset(carroReq(CARRO_BODY), envWith(kv), "tnt_carro");
+
+    expect(result.status).toBe(200);
+    expect(kv.data.has("tenant-manifest:tnt_carro")).toBe(true);
+    expect(kv.data.get(`tenant-token:${await hashToken(TOKEN)}`)).toBe("tnt_carro");
+
+    // O manifesto gravado é LEGÍVEL pelo mesmo parser da leitura — se não fosse,
+    // o tenant seria cadastrado e responderia 500 na primeira pergunta.
+    const gravado = parseManifest(JSON.parse(kv.data.get("tenant-manifest:tnt_carro")!));
+    expect(gravado.ok).toBe(true);
+
+    const body = result.body as {
+      preset: string;
+      tools: Array<{ name: string; scope: string }>;
+      tokenIndexed: boolean;
+      toolPolicy: { tools: Record<string, unknown> };
+    };
+    expect(body.preset).toBe("carro");
+    expect(body.tokenIndexed).toBe(true);
+    expect(body.tools).toEqual([
+      { name: "carro_lead_do_comprador", scope: "customer" },
+      { name: "carro_anuncio_publico", scope: "business" }
+    ]);
+    // No dialeto da BORDA da plataforma: colável sem tradução manual.
+    expect(body.toolPolicy).not.toHaveProperty("version");
+    expect(body.toolPolicy.tools.carro_lead_do_comprador).toEqual({
+      scope: "customer",
+      identityParam: "telefone"
+    });
+  });
+
+  it("a resposta NUNCA carrega a credencial do carro nem o token do tenant", async () => {
+    const kv = fakeKv();
+    const result = await putCarroPreset(carroReq(CARRO_BODY), envWith(kv), "tnt_carro");
+    const serializado = JSON.stringify(result.body);
+    expect(serializado).not.toContain(CHATBOT_TOKEN);
+    expect(serializado).not.toContain(TOKEN);
+  });
+
+  it("o tenantId vem da URL, nunca do corpo", async () => {
+    const kv = fakeKv();
+    await putCarroPreset(carroReq({ ...CARRO_BODY, tenantId: "tnt_outro" }), envWith(kv), "tnt_carro");
+    expect(kv.data.has("tenant-manifest:tnt_carro")).toBe(true);
+    expect(kv.data.has("tenant-manifest:tnt_outro")).toBe(false);
+  });
+
+  it("recusa sem o CHATBOT_TOKEN, sem gravar — a leitura do carro é fail-closed", async () => {
+    const kv = fakeKv();
+    const ausente = await putCarroPreset(carroReq({ token: TOKEN }), envWith(kv), "tnt_carro");
+    const vazio = await putCarroPreset(carroReq({ chatbotToken: "   ", token: TOKEN }), envWith(kv), "tnt_carro");
+    expect(ausente.status).toBe(400);
+    expect(vazio.status).toBe(400);
+    expect(kv.data.size).toBe(0);
+  });
+
+  it("recusa token do tenant curto demais", async () => {
+    const kv = fakeKv();
+    const result = await putCarroPreset(carroReq({ ...CARRO_BODY, token: "curto" }), envWith(kv), "tnt_carro");
+    expect(result.status).toBe(400);
+    expect(kv.data.size).toBe(0);
+  });
+
+  it("recusa corpo que não é JSON", async () => {
+    const kv = fakeKv();
+    const request = new Request("https://gw.test/admin/tenants/tnt_carro/preset/carro", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${ADMIN}` },
+      body: "isto não é json"
+    });
+    expect((await putCarroPreset(request, envWith(kv), "tnt_carro")).status).toBe(400);
+    expect(kv.data.size).toBe(0);
+  });
+
+  it("aceita gravar sem token do tenant — trocar o endpoint não obriga a rotacionar", async () => {
+    const kv = fakeKv();
+    const result = await putCarroPreset(carroReq({ chatbotToken: CHATBOT_TOKEN }), envWith(kv), "tnt_carro");
+    expect(result.status).toBe(200);
+    expect((result.body as { tokenIndexed: boolean }).tokenIndexed).toBe(false);
+    expect(kv.data.has("tenant-manifest:tnt_carro")).toBe(true);
+  });
+
+  it("herda a autorização da rota irmã — fechada sem ADMIN_TOKEN, 401 com token errado", async () => {
+    const kv = fakeKv();
+    expect((await putCarroPreset(carroReq(CARRO_BODY), envWith(kv, null), "tnt_carro")).status).toBe(503);
+    expect(
+      (await putCarroPreset(carroReq(CARRO_BODY, "errado-mas-do-tamanho-certo"), envWith(kv), "tnt_carro")).status
+    ).toBe(401);
+    expect(kv.data.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// O DESPACHO da rota, em `src/server.ts`.
+//
+// Estes testes existem porque os de cima passariam com o preset inteiro escrito
+// e **nenhuma rota apontando para ele** — o handler testado direto não prova que
+// alguém consegue chamá-lo. Não há registry neste repositório: o nome do preset
+// é um ramo do ternário, e um ramo que ninguém escreveu é um 404 na ativação.
+// ---------------------------------------------------------------------------
+
+describe("o despacho de `/admin/tenants/:id/preset/:nome`", () => {
+  const ctx = {} as ExecutionContext;
+
+  /**
+   * O handler do Worker recebe a `Request` do runtime, cuja propriedade `cf` é
+   * `IncomingRequestCfProperties` — que o `new Request` do ambiente não produz.
+   * A diferença é só de tipo em `cf`, e nenhuma rota deste arquivo a lê.
+   */
+  const entrada = (request: Request) => request as unknown as Parameters<typeof worker.fetch>[0];
+
+  it("`carro` chega ao handler do carro — e grava", async () => {
+    const kv = fakeKv();
+    const response = await worker.fetch(entrada(carroReq(CARRO_BODY)), envWith(kv), ctx);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { preset: string };
+    expect(body.preset).toBe("carro");
+    expect(kv.data.has("tenant-manifest:tnt_carro")).toBe(true);
+  });
+
+  it("método diferente de PUT é 405, sem tocar no KV", async () => {
+    const kv = fakeKv();
+    const response = await worker.fetch(
+      entrada(
+        new Request("https://gw.test/admin/tenants/tnt_carro/preset/carro", {
+          method: "GET",
+          headers: { Authorization: `Bearer ${ADMIN}` }
+        })
+      ),
+      envWith(kv),
+      ctx
+    );
+
+    expect(response.status).toBe(405);
+    expect(kv.data.size).toBe(0);
+  });
+
+  it("preset desconhecido continua 404 — a lista é fechada", async () => {
+    const kv = fakeKv();
+    const response = await worker.fetch(
+      entrada(
+        new Request("https://gw.test/admin/tenants/tnt_carro/preset/carroo", {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${ADMIN}` },
+          body: JSON.stringify(CARRO_BODY)
+        })
+      ),
+      envWith(kv),
+      ctx
+    );
+
+    expect(response.status).toBe(404);
+    expect(kv.data.size).toBe(0);
   });
 });
