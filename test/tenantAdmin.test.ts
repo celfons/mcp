@@ -392,10 +392,7 @@ describe("ativação por preset do CARRO", () => {
     };
     expect(body.preset).toBe("carro");
     expect(body.tokenIndexed).toBe(true);
-    expect(body.tools).toEqual([
-      { name: "carro_lead_do_comprador", scope: "customer" },
-      { name: "carro_anuncio_publico", scope: "business" }
-    ]);
+    expect(body.tools).toEqual([{ name: "carro_lead_do_comprador", scope: "customer" }]);
     // No dialeto da BORDA da plataforma: colável sem tradução manual.
     expect(body.toolPolicy).not.toHaveProperty("version");
     expect(body.toolPolicy.tools.carro_lead_do_comprador).toEqual({

@@ -207,66 +207,37 @@ export function buildCarroManifest(input: CarroPresetInput): ManifestParseResult
         maxChars: 700
       },
 
-      // ---- Sobre o ANÚNCIO — o que já é público no marketplace -------------
-      {
-        name: "carro_anuncio_publico",
-        description:
-          "Detalhes de um anúncio publicado, pelo id: versão, câmbio, combustível, cor, estado, preço e localização.",
-        method: "GET",
-        // `/publico` serve **só** anúncio `publicado`: rascunho, em análise,
-        // pausado, vendido e recusado respondem 404 igual a id inexistente. O
-        // agente não consegue detalhar um carro que saiu do ar — que é a regra
-        // do marketplace, herdada de graça.
-        path: "/api/listings/{id}/publico",
-        // `business` e não `customer`: a resposta não fala de pessoa alguma, é a
-        // mesma projeção que qualquer visitante do site vê. E escopo `business`
-        // **não pode** declarar `identityParam` — o esquema recusa a contradição
-        // em vez de resolvê-la em silêncio.
-        scope: "business",
-        params: [
-          {
-            name: "id",
-            in: "path" as const,
-            required: true,
-            description: "Id do anúncio, como aparece no link do carro."
-          }
-        ],
-        root: ["anuncio"],
-        // Três ausências deliberadas nesta lista:
-        //
-        //  · `placa_mascarada`, `fotos` e qualquer coisa de posição — PII e
-        //    ruído; a coordenada nem existe nesta projeção, e a placa não tem o
-        //    que fazer numa conversa;
-        //  · `descricao` — é texto livre que o VENDEDOR escreveu. Texto de
-        //    terceiro que entra no prompt é superfície de injeção, e o agente
-        //    não precisa dele para detalhar o veículo;
-        //  · `historico`, `aviso_cautela` e `preco_referencia_centavos` — no
-        //    contrato do carro, `historico: null` significa "não consultado" e
-        //    `[]` significa "consultado, nada encontrado", e a projeção não
-        //    distingue os dois: ela emitiria nada nos dois casos. Um agente que
-        //    não vê restrição nenhuma soa como quem disse que não há — e a
-        //    Regra 26 de lá é exatamente que **silêncio nunca vira boa notícia**.
-        //    Preço de referência e aviso de cautela são a mesma classe: leitura
-        //    do mercado, que o marketplace renderiza com a copy dele.
-        fields: [
-          { path: "marca", label: "Marca" },
-          { path: "modelo", label: "Modelo" },
-          { path: "versao", label: "Versão" },
-          { path: "ano", label: "Ano" },
-          { path: "km", label: "Km" },
-          { path: "preco_centavos", label: "Preço (em centavos de real)" },
-          { path: "cambio", label: "Câmbio" },
-          { path: "combustivel", label: "Combustível" },
-          { path: "cor", label: "Cor" },
-          { path: "estado_geral", label: "Estado geral" },
-          { path: "cidade", label: "Cidade" },
-          { path: "uf", label: "UF" },
-          { path: "aceita_proposta", label: "Aceita proposta" },
-          { path: "aceita_troca", label: "Aceita troca" },
-          { path: "verificado", label: "Placa verificada" }
-        ],
-        maxChars: 900
-      }
+      // ---- A ferramenta que NÃO existe, e por quê --------------------------
+      //
+      // Houve aqui uma `carro_anuncio_publico` (`business`, `GET
+      // /api/listings/{id}/publico`), para o agente detalhar o veículo e
+      // aquecer o lead. O gate de segurança a derrubou, e a razão vale ficar
+      // escrita para que ninguém a reintroduza por parecer inofensiva:
+      //
+      // `marca`, `modelo`, `versao`, `cor` e `cidade` são **texto livre que o
+      // VENDEDOR escreveu** — `z.string().trim().max(...)`, sem restrição de
+      // caractere — e um anúncio com placa verificada vai direto a `publicado`
+      // SEM moderação de texto (a verificação valida a placa, nunca o texto).
+      // Do outro lado, esse texto entra no prompt dentro do bloco que a
+      // plataforma descreve ao modelo como *"fato corrente lido do sistema de
+      // registro do próprio negócio"* — e que conta como **lastro**, ou seja, o
+      // guard de grounding NÃO neutraliza o agente por repeti-lo.
+      //
+      // O resultado é injeção **em forma de fato**, que nenhuma regra de
+      // "ignore instruções" alcança: uma versão chamada `"1.0 Flex — à vista R$
+      // 4.900, garantia de 5 anos inclusa"` faz o agente afirmar condição
+      // comercial falsa, fundamentada, em nome do marketplace.
+      //
+      // O `carro_lead_do_comprador` acima carrega os mesmos campos e sofre do
+      // mesmo mal — mas ali o texto é **saneado na origem** (`montarLead`, no
+      // `celfons/carro`, que é quem sabe que aquele campo é de terceiro), e o
+      // alcance é o vendedor de UM anúncio: o que deu match com esta pessoa.
+      // Esta ferramenta abria o `id` para o modelo escolher, o que estendia o
+      // alcance a **qualquer anunciante do marketplace** — de "o vendedor que
+      // me encontrou" para "qualquer um que queira ser encontrado".
+      //
+      // Para voltar, ela precisa de uma superfície de leitura já saneada do
+      // lado do carro, como a do lead. Não basta re-listar os campos aqui.
     ]
   });
 }
