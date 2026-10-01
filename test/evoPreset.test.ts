@@ -412,6 +412,33 @@ describe("as ferramentas contra respostas no formato real da EVO", () => {
     expect(linhas).toHaveLength(2);
   });
 
+  it("evo_planos_e_precos desce no envelope de paginação — o swagger diz array, a API viva devolve objeto", async () => {
+    // Medido em 2026-10-01 contra duas unidades reais: `/api/v3/membership`
+    // responde `{ qtde, lista: null, list: [...] }`, não o array do swagger. Com
+    // `root: ["$"]` o projetor recebia o objeto e emitia texto vazio — toda
+    // pergunta de preço virava `empty_result`, e este arquivo seguia verde
+    // porque mockava o array. O teste de cima continua valendo: `$` é o último
+    // candidato, então o array do swagger também projeta.
+    const envelope = {
+      qtde: 2,
+      lista: null,
+      list: [
+        { idMembership: 2651, nameMembership: "VIP", value: 1000.0, duration: 3, durationType: "Months", maxAmountInstallments: null },
+        { idMembership: 2526, nameMembership: "PERSONAL START", value: 400.0, duration: 1, durationType: "Months", maxAmountInstallments: 2 }
+      ]
+    };
+    const fetchMock = vi.fn().mockResolvedValue(json(envelope));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runTool(manifest!, tool("evo_planos_e_precos"), {});
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${EVO_BASE_URL}/api/v3/membership?active=true&take=20&idBranch=3`);
+    const linhas = result.content[0].text.split("\n");
+    expect(linhas[0]).toBe("Plano: VIP · Valor: 1000 · Duração: 3 · Unidade: Months");
+    expect(linhas[1]).toBe("Plano: PERSONAL START · Valor: 400 · Duração: 1 · Unidade: Months · Parcelas: 2");
+    expect(linhas).toHaveLength(2);
+  });
+
   it("evo_servicos_e_precos é business: consulta sem identidade nenhuma", () => {
     const fetchMock = vi
       .fn()

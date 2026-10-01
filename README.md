@@ -397,6 +397,26 @@ tempo; repetir matrícula cria duas. Escrita é outra feature, e ela reabre o P-
    por turno.
 4. **`idBranch`** numa rede multi-unidade: sem ele, a EVO responde pelo escopo do token.
 
+O que a ativação de 2026-10-01 (rede Gaviões, unidades 82 e 107) **já mediu**, para não
+medir de novo:
+
+- **O filtro `phone` é exato e em dígitos locais** (DDD + número, 11 dígitos). Com `55`
+  na frente, com máscara ou sem DDD: zero resultados. `br_local` é o transform certo.
+- **A secret key é da UNIDADE, não da rede.** O DNS é o mesmo para a rede inteira, mas
+  cada unidade emite a própria chave, e `idBranch` **não** troca a unidade dos cadastros:
+  pedir `idBranch=82` com a chave da 107 devolve alunos da 107. Ative cada tenant com a
+  chave da unidade dele; o `idBranch` só pina a que a chave já é.
+- **`/api/v3/membership` não honra o swagger.** Ele declara array; a API viva devolve o
+  envelope `{ qtde, lista, list: [...] }`. O preset desce em `["list", "lista", "$"]`.
+- **`/api/v1/service` depende de permissão** do usuário de integração: nas duas chaves
+  testadas respondeu `403`. Sem a permissão de "Serviços" liberada na EVO,
+  `evo_servicos_e_precos` degrada em `tool_error` em todo turno — libere lá ou ative com
+  `"include": "business"` sabendo que essa consulta não responde.
+- **Rate limit: 5 requisições por segundo por chave** (`x-rate-limit-limit: 1s`,
+  `x-rate-limit-remaining: 4`). Os dois saltos de um turno cabem com folga.
+- `/receivables` sem filtro é recusado pela própria EVO (`400`), e `/entries?idMember=`
+  filtra de verdade — a trava do gateway (resolução vazia aborta) tem uma segunda atrás.
+
 ### O que não deve passar por aqui
 
 Preço de plano é a pergunta nº 1 de uma academia e a mais tentadora de pôr no MCP. Mas o
