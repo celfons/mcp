@@ -321,7 +321,12 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { name: "name", in: "query", description: "Filtra planos por nome, quando o cliente citar um." }
         ],
         query: { active: "true", take: "20", ...branch },
-        root: ["$"],
+        // O swagger declara a resposta como array; a API viva devolve o envelope
+        // de paginação `{ qtde, lista, list: [...] }` (medido na unidade 82 e na
+        // 107 em 2026-10-01). Com `["$"]` o projetor recebia o objeto, não a lista,
+        // e toda pergunta de preço degradava em `empty_result` sem nada vermelho.
+        // `$` fica por último para o caso de a W12 passar a honrar o swagger.
+        root: ["list", "lista", "$"],
         fields: [
           { path: "[].nameMembership", label: "Plano" },
           { path: "[].value", label: "Valor" },
@@ -340,7 +345,9 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { name: "name", in: "query", description: "Filtra serviços por nome, quando o cliente citar um." }
         ],
         query: { active: "true", take: "20", ...branch },
-        root: ["$"],
+        // Mesmos candidatos de `evo_planos_e_precos`: o formato real de `/service`
+        // não pôde ser medido (403 nos tokens testados), e a lista cobre os dois.
+        root: ["list", "lista", "$"],
         fields: [
           { path: "[].nameService", label: "Serviço" },
           { path: "[].value", label: "Valor" },
