@@ -4,6 +4,7 @@ import { checkOutboundUrl, safeFetch, OutboundError } from "../src/tenant/safeUr
 import { project, readPath, parseRepeatPath } from "../src/tenant/project";
 import { resolveTenant, hashToken, readBearer } from "../src/tenant/store";
 import { runTool, asStringArgs } from "../src/tenant/gateway";
+import { buildEvoManifest, EVO_PRESET_VERSION } from "../src/tenant/presets/evo";
 
 // ---------------------------------------------------------------------------
 // O gateway por tenant (celfons/whatsapp#1324).
@@ -131,6 +132,88 @@ describe("isolamento entre tenants", () => {
 });
 
 // --- 2 · Manifesto ----------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Manifesto de preset é DERIVADO do código: quando o preset muda, o gravado é
+// regerado na leitura. É o que dispensa rota de admin e token para que uma
+// consulta nova chegue a quem ativou antes dela.
+// ---------------------------------------------------------------------------
+
+describe("regeneração do manifesto de preset na leitura", () => {
+  const evo = (overrides: Record<string, unknown> = {}) => {
+    const built = buildEvoManifest({ tenantId: "tnt_gym", dns: "gavioes", secretKey: "chave", idBranch: 107 });
+    if (!built.ok) throw new Error(built.error);
+    return { ...built.manifest, ...overrides };
+  };
+  /** A ativação de ANTES: sem carimbo e sem as consultas que entraram depois. */
+  const v1 = () => {
+    const { preset: _semCarimbo, ...m } = evo();
+    return { ...m, tools: m.tools.filter((t) => !["evo_modalidades", "evo_grade_de_aulas"].includes(t.name)) };
+  };
+  const kvWith = async (manifest: unknown) => {
+    const entries = new Map<string, unknown>([
+      [`tenant-token:${await hashToken(TOKEN_A)}`, "tnt_gym"],
+      ["tenant-manifest:tnt_gym", manifest]
+    ]);
+    const puts: string[] = [];
+    return {
+      puts,
+      get: async (key: string, type?: string) => {
+        const value = entries.get(key);
+        if (value === undefined) return null;
+        return type === "json" ? value : (value as string);
+      },
+      put: async (key: string, value: string) => {
+        puts.push(key);
+        entries.set(key, JSON.parse(value));
+      }
+    };
+  };
+
+  it("manifesto da ativação antiga sai regerado com o preset atual, e é gravado de volta", async () => {
+    const kv = await kvWith(v1());
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const nomes = resolved.tenant.manifest.tools.map((t) => t.name);
+    expect(nomes).toContain("evo_modalidades");
+    expect(nomes).toContain("evo_grade_de_aulas");
+    expect(resolved.tenant.manifest.preset).toEqual({ name: "evo", version: EVO_PRESET_VERSION });
+    // Credencial e unidade são as gravadas — ninguém digitou nada.
+    expect(resolved.tenant.manifest.auth).toEqual(v1().auth);
+    expect(resolved.tenant.manifest.tools.every((t) => t.query.idBranch === "107" || t.name === "evo_minha_frequencia")).toBe(true);
+    expect(kv.puts).toEqual(["tenant-manifest:tnt_gym"]);
+  });
+
+  it("manifesto na versão corrente não é regravado a cada leitura", async () => {
+    const kv = await kvWith(evo());
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    expect(kv.puts).toEqual([]);
+  });
+
+  it("manifesto colado à mão nunca é tocado — regerar por cima apagaria o que o operador escreveu", async () => {
+    const colado = manifestFor("tnt_gym", "api.cliente.com");
+    const kv = await kvWith(colado);
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.tenant.manifest.tools.map((t) => t.name)).toEqual(["consultar_pedido"]);
+    expect(kv.puts).toEqual([]);
+  });
+
+  it("falha ao regravar não falha a requisição — o manifesto novo serve este turno", async () => {
+    const kv = await kvWith(v1());
+    kv.put = async () => {
+      throw new Error("KV indisponível");
+    };
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.tenant.manifest.tools.map((t) => t.name)).toContain("evo_grade_de_aulas");
+  });
+});
 
 describe("manifesto", () => {
   it("aceita um manifesto completo", () => {
@@ -326,6 +409,160 @@ describe("execução da ferramenta", () => {
 //
 // É o que permite o agente SUGERIR a partir do catálogo do cliente: o bloco
 // chega como texto no prompt e o modelo escolhe entre o que veio.
+
+// ---------------------------------------------------------------------------
+// O cache das consultas de NEGÓCIO.
+//
+// Três propriedades, e cada uma é uma linha de teste: (1) dentro da validade
+// ninguém vai ao fio; (2) vencida e com a API fora, a resposta anterior sai com
+// a idade declarada — e falha nunca é gravada; (3) consulta de CLIENTE nunca
+// passa por aqui, nem quando alguém tenta declarar TTL nela.
+// ---------------------------------------------------------------------------
+
+describe("cache das consultas de negócio", () => {
+  const withBusiness = (cacheTtlS?: number) =>
+    parseManifest({
+      ...manifestFor("tnt_a", "api.cliente.com"),
+      tools: [
+        ...manifestFor("tnt_a", "api.cliente.com").tools,
+        {
+          name: "tabela_precos",
+          description: "Planos e valores",
+          method: "GET",
+          path: "/planos",
+          scope: "business",
+          params: [{ name: "nome", in: "query" }],
+          fields: [{ path: "[].nome", label: "Plano" }, { path: "[].valor", label: "Valor" }],
+          ...(cacheTtlS === undefined ? {} : { cacheTtlS })
+        }
+      ]
+    });
+
+  /** KV de mentira que registra puts e honra get. */
+  const fakeCache = () => {
+    const data = new Map<string, string>();
+    return {
+      data,
+      get: async (key: string) => data.get(key) ?? null,
+      put: async (key: string, value: string) => void data.set(key, value)
+    };
+  };
+
+  const planos = (n: number) => new Response(JSON.stringify([{ nome: `Plano ${n}`, valor: 100 + n }]), { status: 200 });
+
+  it("dentro da validade, a segunda consulta não vai ao fio", async () => {
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi.fn().mockResolvedValueOnce(planos(1)).mockResolvedValueOnce(planos(2));
+    vi.stubGlobal("fetch", fetchMock);
+    const cache = fakeCache();
+    let clock = 1_000_000;
+
+    const primeira = await runTool(built.manifest, tool, {}, () => clock, cache);
+    clock += 5 * 60_000;
+    const segunda = await runTool(built.manifest, tool, {}, () => clock, cache);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(primeira.content[0].text).toBe("Plano: Plano 1 · Valor: 101");
+    expect(segunda.content[0].text).toBe("Plano: Plano 1 · Valor: 101");
+    // A chave carrega tenant e ferramenta: dois tenants nunca se enxergam.
+    expect([...cache.data.keys()][0]).toMatch(/^tool-cache:tnt_a:tabela_precos:[0-9a-f]{64}$/);
+  });
+
+  it("vencida, consulta de novo — e argumento diferente é entrada diferente", async () => {
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi.fn().mockResolvedValueOnce(planos(1)).mockResolvedValueOnce(planos(2)).mockResolvedValueOnce(planos(3));
+    vi.stubGlobal("fetch", fetchMock);
+    const cache = fakeCache();
+    let clock = 1_000_000;
+
+    await runTool(built.manifest, tool, {}, () => clock, cache);
+    clock += 11 * 60_000;
+    const vencida = await runTool(built.manifest, tool, {}, () => clock, cache);
+    const outra = await runTool(built.manifest, tool, { nome: "vip" }, () => clock, cache);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(vencida.content[0].text).toBe("Plano: Plano 2 · Valor: 102");
+    expect(outra.content[0].text).toBe("Plano: Plano 3 · Valor: 103");
+    expect(cache.data.size).toBe(2);
+  });
+
+  it("vencida e com a API fora, serve a resposta anterior com a idade declarada — e não grava a falha", async () => {
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi.fn().mockResolvedValueOnce(planos(1)).mockResolvedValue(new Response("", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const cache = fakeCache();
+    let clock = 1_000_000;
+
+    await runTool(built.manifest, tool, {}, () => clock, cache);
+    const gravado = cache.data.get([...cache.data.keys()][0]);
+    clock += 2 * 60 * 60_000;
+    const result = await runTool(built.manifest, tool, {}, () => clock, cache);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toBe(
+      "Plano: Plano 1 · Valor: 101\nObservação: dados consultados há 2 h; o sistema da academia não respondeu agora."
+    );
+    expect(cache.data.get([...cache.data.keys()][0])).toBe(gravado);
+  });
+
+  it("passado o teto do vencido, a falha é a falha — resposta de ontem não vira preço de hoje", async () => {
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(planos(1)).mockResolvedValue(new Response("", { status: 503 })));
+    const cache = fakeCache();
+    let clock = 1_000_000;
+
+    await runTool(built.manifest, tool, {}, () => clock, cache);
+    clock += 25 * 60 * 60_000;
+    const result = await runTool(built.manifest, tool, {}, () => clock, cache);
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("sem TTL declarado, ou sem cache injetado, toda chamada vai ao fio", async () => {
+    const semTtl = withBusiness();
+    if (!semTtl.ok) throw new Error(semTtl.error);
+    const tool = semTtl.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi.fn().mockResolvedValue(planos(1));
+    vi.stubGlobal("fetch", fetchMock);
+    const cache = fakeCache();
+
+    await runTool(semTtl.manifest, tool, {}, Date.now, cache);
+    await runTool(semTtl.manifest, tool, {}, Date.now, cache);
+    expect(cache.data.size).toBe(0);
+
+    const comTtl = withBusiness(600);
+    if (!comTtl.ok) throw new Error(comTtl.error);
+    await runTool(comTtl.manifest, comTtl.manifest.tools.find((t) => t.name === "tabela_precos")!, {});
+    await runTool(comTtl.manifest, comTtl.manifest.tools.find((t) => t.name === "tabela_precos")!, {});
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("consulta de CLIENTE nunca é cacheada — o esquema recusa TTL fora de business", async () => {
+    const tentativa = parseManifest({
+      ...manifestFor("tnt_a", "api.cliente.com"),
+      tools: [{ ...manifestFor("tnt_a", "api.cliente.com").tools[0], cacheTtlS: 600 }]
+    });
+    expect(tentativa.ok).toBe(false);
+    if (!tentativa.ok) expect(tentativa.error).toMatch(/cacheTtlS só existe em escopo business/);
+
+    // E a consulta de cliente de sempre, com cache injetado, segue sem gravar nada.
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const cliente = built.manifest.tools.find((t) => t.name === "consultar_pedido")!;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    const cache = fakeCache();
+    await runTool(built.manifest, cliente, { orderId: "1", telefone: "5511" }, Date.now, cache);
+    expect(cache.data.size).toBe(0);
+  });
+});
 
 describe("projeção de lista", () => {
   const payload = {

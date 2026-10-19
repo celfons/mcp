@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { putManifest, deleteManifest, getManifest, secretsMatch, putEvoPreset } from "../src/tenant/admin";
+import { putManifest, deleteManifest, getManifest, secretsMatch, putEvoPreset, refreshEvoPreset } from "../src/tenant/admin";
 import { parseManifest } from "../src/tenant/manifest";
 import { hashToken } from "../src/tenant/store";
 
@@ -295,6 +295,130 @@ describe("ativação por preset da EVO", () => {
     expect((await putEvoPreset(presetReq(EVO_BODY), envWith(kv, null), "tnt_gym")).status).toBe(503);
     expect((await putEvoPreset(presetReq(EVO_BODY, "errado-mas-do-tamanho-certo"), envWith(kv), "tnt_gym")).status).toBe(401);
     expect(kv.data.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// O REFRESH do preset (`POST /admin/tenants/:id/preset/evo/refresh`).
+//
+// O manifesto é gerado na ativação e fica parado no KV. Quando o preset ganha
+// uma consulta, quem ativou antes dela não a recebe — e o único jeito era o PUT
+// inteiro, com o DNS e a chave da EVO passando por mais um terminal para dizer
+// o que o KV já sabia. O refresh regera com o preset atual reaproveitando a
+// credencial, a unidade, o recorte e o rótulo gravados. O que ele NÃO pode
+// fazer: regerar por cima de um manifesto que não veio do preset, nem tocar no
+// índice do token.
+// ---------------------------------------------------------------------------
+
+const refreshReq = (token: string | null = ADMIN) =>
+  new Request("https://gw.test/admin/tenants/tnt_gym/preset/evo/refresh", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+
+/** Grava, por cima, uma versão do manifesto SEM as consultas dadas — a academia ativada antes delas. */
+const forgetTools = (kv: ReturnType<typeof fakeKv>, names: readonly string[]) => {
+  const stored = JSON.parse(kv.data.get("tenant-manifest:tnt_gym")!);
+  stored.tools = stored.tools.filter((t: { name: string }) => !names.includes(t.name));
+  kv.data.set("tenant-manifest:tnt_gym", JSON.stringify(stored));
+  return stored;
+};
+
+describe("refresh do preset da EVO", () => {
+  it("regera as consultas com o preset atual, reaproveitando credencial, unidade e token", async () => {
+    const kv = fakeKv();
+    await putEvoPreset(presetReq({ ...EVO_BODY, label: "Gaviões Helena" }), envWith(kv), "tnt_gym");
+    const antes = forgetTools(kv, ["evo_modalidades", "evo_grade_de_aulas"]);
+    expect(antes.tools).toHaveLength(8);
+    const entradas = kv.data.size;
+
+    const result = await refreshEvoPreset(refreshReq(), envWith(kv), "tnt_gym");
+
+    expect(result.status).toBe(200);
+    const body = result.body as { added: string[]; removed: string[]; tools: { name: string }[]; include: string; idBranch?: number };
+    expect(body.added).toEqual(["evo_modalidades", "evo_grade_de_aulas"]);
+    expect(body.removed).toEqual([]);
+    expect(body.tools).toHaveLength(10);
+    expect(body.include).toBe("all");
+    expect(body.idBranch).toBe(4);
+
+    const depois = JSON.parse(kv.data.get("tenant-manifest:tnt_gym")!);
+    // A credencial é a MESMA que a ativação montou — ninguém digitou DNS nem chave.
+    expect(depois.auth).toEqual(antes.auth);
+    expect(depois.label).toBe("Gaviões Helena");
+    // As consultas que já existiam saem IDÊNTICAS; as novas herdam a unidade pinada.
+    for (const antiga of antes.tools as { name: string }[]) {
+      expect(depois.tools.find((t: { name: string }) => t.name === antiga.name)).toEqual(antiga);
+    }
+    for (const nova of body.added) {
+      expect(depois.tools.find((t: { name: string }) => t.name === nova).query.idBranch).toBe("4");
+    }
+    // O índice do token não foi tocado: mesma quantidade de chaves, mesmo tenant.
+    expect(kv.data.size).toBe(entradas);
+    expect(kv.data.get(`tenant-token:${await hashToken(TOKEN)}`)).toBe("tnt_gym");
+  });
+
+  it("preserva o recorte: academia ativada em business continua sem consulta de aluno", async () => {
+    const kv = fakeKv();
+    await putEvoPreset(presetReq({ ...EVO_BODY, include: "business" }), envWith(kv), "tnt_gym");
+    forgetTools(kv, ["evo_modalidades", "evo_grade_de_aulas"]);
+
+    const result = await refreshEvoPreset(refreshReq(), envWith(kv), "tnt_gym");
+
+    expect(result.status).toBe(200);
+    const body = result.body as { include: string; tools: { name: string; scope: string }[] };
+    expect(body.include).toBe("business");
+    expect(body.tools.map((t) => t.name)).toEqual([
+      "evo_planos_e_precos",
+      "evo_servicos_e_precos",
+      "evo_modalidades",
+      "evo_grade_de_aulas"
+    ]);
+    expect(body.tools.every((t) => t.scope === "business")).toBe(true);
+  });
+
+  it("sem unidade pinada na ativação, nenhuma unidade é inventada no refresh", async () => {
+    const kv = fakeKv();
+    const { idBranch: _semBranch, ...semUnidade } = EVO_BODY;
+    await putEvoPreset(presetReq(semUnidade), envWith(kv), "tnt_gym");
+
+    const result = await refreshEvoPreset(refreshReq(), envWith(kv), "tnt_gym");
+
+    expect(result.status).toBe(200);
+    expect(result.body).not.toHaveProperty("idBranch");
+    const depois = JSON.parse(kv.data.get("tenant-manifest:tnt_gym")!);
+    expect(depois.tools.some((t: { query: Record<string, string> }) => "idBranch" in t.query)).toBe(false);
+  });
+
+  it("a resposta NUNCA carrega a credencial", async () => {
+    const kv = fakeKv();
+    await putEvoPreset(presetReq(EVO_BODY), envWith(kv), "tnt_gym");
+    const result = await refreshEvoPreset(refreshReq(), envWith(kv), "tnt_gym");
+    const serializado = JSON.stringify(result.body);
+    expect(serializado).not.toContain("chave-da-evo");
+    expect(serializado).not.toContain("Basic ");
+    expect(serializado).not.toContain(TOKEN);
+  });
+
+  it("404 sem manifesto; 409 quando o manifesto não veio do preset — e não grava nada", async () => {
+    const vazio = fakeKv();
+    expect((await refreshEvoPreset(refreshReq(), envWith(vazio), "tnt_gym")).status).toBe(404);
+
+    const colado = fakeKv();
+    await putManifest(req({ manifest: manifest("tnt_gym"), token: TOKEN }), envWith(colado), "tnt_gym");
+    const antes = colado.data.get("tenant-manifest:tnt_gym");
+    const result = await refreshEvoPreset(refreshReq(), envWith(colado), "tnt_gym");
+    expect(result.status).toBe(409);
+    expect(colado.data.get("tenant-manifest:tnt_gym")).toBe(antes);
+  });
+
+  it("herda a autorização — fechada sem ADMIN_TOKEN, 401 com token errado", async () => {
+    const kv = fakeKv();
+    await putEvoPreset(presetReq(EVO_BODY), envWith(kv), "tnt_gym");
+    const antes = kv.data.get("tenant-manifest:tnt_gym");
+    expect((await refreshEvoPreset(refreshReq(), envWith(kv, null), "tnt_gym")).status).toBe(503);
+    expect((await refreshEvoPreset(refreshReq("errado-mas-do-tamanho-certo"), envWith(kv), "tnt_gym")).status).toBe(401);
+    expect(kv.data.get("tenant-manifest:tnt_gym")).toBe(antes);
   });
 });
 

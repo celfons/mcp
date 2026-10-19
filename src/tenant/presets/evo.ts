@@ -71,6 +71,21 @@ import { parseManifest, type ManifestParseResult, type TenantManifest } from "..
 export const EVO_BASE_URL = "https://evo-integracao-api.w12app.com.br";
 
 /**
+ * A versão do preset, carimbada em todo manifesto que ele emite.
+ *
+ * É o que faz o preset ser de fato "o lugar onde corrigir todo mundo": o
+ * gateway compara o carimbo do manifesto gravado com esta constante ao resolver
+ * o tenant e, se o gravado é mais velho, regera na hora (`refreshStaleEvoManifest`)
+ * — sem rota de admin, sem token, sem o operador saber que houve deploy. Suba
+ * o número a cada mudança no CONJUNTO de consultas ou nos campos delas; uma
+ * mudança só de comentário não precisa.
+ *
+ *   1 · as 8 consultas originais (sem carimbo — um manifesto sem `preset` É v1)
+ *   2 · + `evo_modalidades`, `evo_grade_de_aulas`, `cacheTtlS` nas de negócio
+ */
+export const EVO_PRESET_VERSION = 2;
+
+/**
  * A normalização do telefone antes de ele virar filtro na EVO. Ver o item 3 do
  * cabeçalho: é a suposição a revisar primeiro quando uma academia ativar e
  * nenhuma consulta escopada achar ninguém.
@@ -167,6 +182,91 @@ export function basicAuthValue(user: string, password: string): string {
  * gravação, com nome, em vez de na primeira pergunta de um cliente.
  */
 export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
+  const { dns, secretKey, ...rest } = input;
+  return buildEvoManifestWithAuthorization({ ...rest, authorization: basicAuthValue(dns, secretKey) });
+}
+
+/** O preset com a credencial JÁ montada — o que um manifesto gravado carrega. */
+export type EvoPresetAuthorizedInput = Omit<EvoPresetInput, "dns" | "secretKey"> & {
+  /** O valor completo do header `Authorization` (`Basic …`). */
+  authorization: string;
+};
+
+/**
+ * Recupera, de um manifesto EVO gravado, a entrada que o gerou — menos DNS e
+ * chave, que não são recuperáveis (e não precisam ser: o header `Basic` pronto
+ * é tudo o que a próxima geração consome).
+ *
+ * É o que permite REGERAR as consultas de uma academia já ativada quando o
+ * preset ganha uma consulta nova, sem pedir a credencial de novo. O manifesto
+ * no KV é gerado na ativação; sem isto, cada consulta nova do preset exigiria
+ * do operador o `PUT` inteiro, com o segredo da EVO passando por mais um
+ * terminal.
+ *
+ * Devolve erro, e não um palpite, quando o manifesto não tem a forma que este
+ * preset emite: outro host, outro esquema de auth. Regerar por cima de um
+ * manifesto colado à mão apagaria o que o operador escreveu.
+ */
+export function evoPresetInputFromManifest(
+  stored: TenantManifest
+): { ok: true; input: EvoPresetAuthorizedInput } | { ok: false; error: string } {
+  if (stored.baseUrl !== EVO_BASE_URL) {
+    return { ok: false, error: `baseUrl "${stored.baseUrl}" não é a da EVO — este manifesto não veio do preset.` };
+  }
+  if (stored.auth.type !== "header" || stored.auth.name !== "Authorization" || !stored.auth.value.startsWith("Basic ")) {
+    return { ok: false, error: "a credencial gravada não é o Basic da EVO — este manifesto não veio do preset." };
+  }
+  // A unidade pinada mora na query fixa de toda consulta; basta a primeira.
+  const pinned = stored.tools.map((t) => t.query.idBranch).find((v) => v !== undefined);
+  const idBranch = pinned === undefined ? undefined : Number.parseInt(pinned, 10);
+  if (pinned !== undefined && !Number.isInteger(idBranch)) {
+    return { ok: false, error: `idBranch gravado ("${pinned}") não é inteiro.` };
+  }
+  return {
+    ok: true,
+    input: {
+      tenantId: stored.tenantId,
+      label: stored.label,
+      authorization: stored.auth.value,
+      timeoutMs: stored.timeoutMs,
+      // O recorte é recuperado pelo que foi ANUNCIADO, não por uma flag gravada:
+      // academia sem nenhuma consulta de aluno é academia ativada em `business`.
+      include: stored.tools.some((t) => t.scope === "customer") ? "all" : "business",
+      ...(idBranch === undefined ? {} : { idBranch })
+    }
+  };
+}
+
+/**
+ * O manifesto gravado veio deste preset e é mais velho do que ele?
+ *
+ * Um manifesto sem carimbo que tem a forma da EVO (host e Basic) é a ativação
+ * de antes do carimbo existir — v1 por definição. Um manifesto que não tem a
+ * forma da EVO nunca é "velho": foi colado à mão, e regerar por cima apagaria
+ * o que o operador escreveu.
+ */
+export function isStaleEvoManifest(stored: TenantManifest): boolean {
+  if (stored.preset && stored.preset.name !== "evo") return false;
+  if (!evoPresetInputFromManifest(stored).ok) return false;
+  return (stored.preset?.version ?? 1) < EVO_PRESET_VERSION;
+}
+
+/**
+ * Regera um manifesto EVO desatualizado com o preset atual, reaproveitando o
+ * que está gravado. Devolve `null` quando não há o que fazer (não é do preset,
+ * ou já está na versão corrente) e quando a regeneração falha — nesse caso o
+ * chamador segue com o manifesto gravado, que continua válido: um deploy do
+ * preset nunca derruba um tenant que já funcionava.
+ */
+export function refreshStaleEvoManifest(stored: TenantManifest): TenantManifest | null {
+  if (!isStaleEvoManifest(stored)) return null;
+  const recovered = evoPresetInputFromManifest(stored);
+  if (!recovered.ok) return null;
+  const built = buildEvoManifestWithAuthorization(recovered.input);
+  return built.ok ? built.manifest : null;
+}
+
+export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInput): ManifestParseResult {
   const branch = input.idBranch === undefined ? {} : { idBranch: String(input.idBranch) };
   const label = input.label?.trim() || "EVO";
   // A filtragem é por `scope` declarado, e não por uma segunda lista de nomes:
@@ -178,10 +278,11 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
     tenantId: input.tenantId,
     label,
     baseUrl: EVO_BASE_URL,
+    preset: { name: "evo", version: EVO_PRESET_VERSION },
     auth: {
       type: "header",
       name: "Authorization",
-      value: basicAuthValue(input.dns, input.secretKey)
+      value: input.authorization
     },
     // Abaixo do teto de 4 s que o backend concede a uma chamada, com folga para
     // os dois saltos das ferramentas que resolvem.
@@ -334,7 +435,8 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { path: "[].durationType", label: "Unidade" },
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
-        maxChars: 1500
+        maxChars: 1500,
+        cacheTtlS: 3600
       },
       {
         name: "evo_servicos_e_precos",
@@ -353,7 +455,72 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { path: "[].value", label: "Valor" },
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
-        maxChars: 1200
+        maxChars: 1200,
+        cacheTtlS: 3600
+      },
+      // ---- A VITRINE: modalidades e grade de aulas ---------------------------
+      //
+      // Entraram depois do preço, e por uma medição, não por "também é
+      // inofensivo": no Tier-3 do Jardim Helena (19/10/2026) as duas personas
+      // que perguntaram "spinning está incluso?" e "qual a grade?" saíram do
+      // automático — o briefing não carregava a resposta, e grade de aula não
+      // é quase-estática como endereço: muda toda semana e mora na EVO, que é
+      // onde a academia a mantém. As duas são sobre o NEGÓCIO: nenhuma fala de
+      // pessoa, nenhuma recebe telefone, nenhuma resolve `idMember`.
+      {
+        name: "evo_modalidades",
+        description: "Modalidades e aulas que a academia oferece, com descrição e grupo (musculação, spinning, lutas, dança).",
+        path: "/api/v1/activities",
+        scope: "business",
+        params: [
+          {
+            name: "search",
+            in: "query",
+            description: "Filtra por nome da modalidade ou do grupo, quando o cliente citar um."
+          }
+        ],
+        query: { take: "50", ...branch },
+        // Mesmos candidatos de `evo_planos_e_precos`: o swagger declara array e a
+        // API viva tende ao envelope `{ list, lista }`.
+        root: ["list", "lista", "$"],
+        fields: [
+          { path: "[].name", label: "Modalidade" },
+          { path: "[].description", label: "Descrição" },
+          { path: "[].activityGroup", label: "Grupo" },
+          { path: "[].audience", label: "Público" }
+        ],
+        maxChars: 1500,
+        cacheTtlS: 21600
+      },
+      {
+        name: "evo_grade_de_aulas",
+        description: "Grade de aulas da academia: aula, dia, horário, professor e sala. Sem data, a semana corrente.",
+        path: "/api/v1/activities/schedule",
+        scope: "business",
+        params: [
+          {
+            name: "date",
+            in: "query",
+            description: "Dia da grade no formato AAAA-MM-DD, quando o cliente citar um; sem data, a semana corrente."
+          }
+        ],
+        // `showFullWeek` devolve domingo a sábado em volta da data (ou de hoje);
+        // SEM `idMember`, que é o que faz esta consulta ser sobre a academia e
+        // não sobre um aluno — `evo_minhas_aulas` é a irmã escopada.
+        query: { showFullWeek: "true", onlyAvailables: "false", take: "60", ...branch },
+        root: ["list", "lista", "$"],
+        fields: [
+          { path: "[].name", label: "Aula" },
+          { path: "[].activityDate", label: "Data" },
+          { path: "[].startTime", label: "Início" },
+          { path: "[].endTime", label: "Fim" },
+          { path: "[].instructor", label: "Professor" },
+          { path: "[].area", label: "Sala" }
+        ],
+        // O teto do esquema: uma semana inteira de grade é a consulta mais longa
+        // do preset, e o que não couber é cortado pelo projetor, nunca inventado.
+        maxChars: 1800,
+        cacheTtlS: 900
       }
     ].filter((tool) => keep(tool.scope))
   });

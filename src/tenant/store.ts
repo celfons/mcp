@@ -1,4 +1,5 @@
 import { parseManifest, type TenantManifest } from "./manifest";
+import { refreshStaleEvoManifest } from "./presets/evo";
 
 /**
  * De onde vem o manifesto, e como se sabe QUEM está chamando.
@@ -82,6 +83,18 @@ export async function resolveTenant(request: Request, env: Env): Promise<Resolve
   // exatamente como um tenant passa a responder pelo outro.
   if (parsed.manifest.tenantId !== tenantId) {
     return { ok: false, reason: "invalid_manifest", detail: "tenantId do manifesto não casa com a chave" };
+  }
+
+  // Manifesto gerado por preset é DERIVADO do código: quando o preset muda, o
+  // gravado é regerado aqui, na primeira leitura depois do deploy, e gravado de
+  // volta. Sem isto, cada consulta nova do preset exigia uma rota de admin, um
+  // token e um operador lembrando de rodá-la para cada academia. A regravação
+  // que falhar não falha a requisição: o manifesto novo serve este turno e o
+  // próximo tenta gravar de novo.
+  const refreshed = refreshStaleEvoManifest(parsed.manifest);
+  if (refreshed) {
+    await kv.put(`${MANIFEST_PREFIX}${tenantId}`, JSON.stringify(refreshed)).catch(() => undefined);
+    return { ok: true, tenant: { tenantId, manifest: refreshed } };
   }
 
   return { ok: true, tenant: { tenantId, manifest: parsed.manifest } };

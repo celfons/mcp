@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildEvoManifest, evoToolPolicy, basicAuthValue, EVO_BASE_URL } from "../src/tenant/presets/evo";
+import {
+  buildEvoManifest,
+  evoToolPolicy,
+  basicAuthValue,
+  isStaleEvoManifest,
+  EVO_BASE_URL,
+  EVO_PRESET_VERSION
+} from "../src/tenant/presets/evo";
 import { runTool } from "../src/tenant/gateway";
 
 // ---------------------------------------------------------------------------
@@ -77,33 +84,84 @@ describe("o preset emite um manifesto que o esquema aceita", () => {
     }
   });
 
-  it("A REGRA: ou fala do cliente que perguntou, ou é plano e preço — não há terceira classe", () => {
+  it("A REGRA: ou fala do cliente que perguntou, ou é a VITRINE — não há terceira classe", () => {
     // Esta é a fronteira do produto, e ela é mais estreita do que "é GET".
     //
     // Duas classes, e só duas:
     //   (a) `customer` — a resposta fala da pessoa amarrada ao telefone
     //       verificado. O que é dela, ela pode ver;
-    //   (b) `business` — SÓ a tabela de preço. Plano e serviço, com valor.
+    //   (b) `business` — a VITRINE: o que a academia poria na parede da
+    //       recepção. Plano e serviço com valor; modalidades; grade de aulas.
     //
-    // O que ficou de fora não ficou por ser perigoso: grade de aulas,
-    // modalidades, endereço, horário, convênios e a loja são todos inofensivos.
-    // Ficaram de fora porque a regra é uma allowlist, e allowlist que aceita
-    // "isso também é inofensivo" deixa de ser allowlist em três meses. Fora
-    // isso, quase tudo dessa lista é quase estático — mora mais barato no
-    // contexto que o dono escreve no portal, sem custar uma consulta viva e uma
-    // chamada de LLM por turno.
+    // A lista é uma allowlist, e cada entrada tem de responder duas perguntas:
+    // o dono poria isso na vitrine? e muda rápido demais para morar no
+    // briefing? Preço respondeu as duas desde o início. Modalidades e grade
+    // entraram em 19/10/2026 por uma MEDIÇÃO, não por "também é inofensivo":
+    // no Tier-3 do Jardim Helena, "spinning está incluso?" e "qual a grade?"
+    // tiraram duas personas do automático, e grade de aula muda toda semana —
+    // mora na EVO, onde a academia a mantém. Endereço, horário de funcionamento
+    // e convênios continuam FORA: quase estáticos, moram mais barato no
+    // briefing, sem custar uma consulta viva e uma chamada de LLM por turno.
     //
-    // Consulta nova de negócio: ou entra nesta lista com o preço no meio, ou
-    // não entra.
-    const PRECO = ["/api/v3/membership", "/api/v1/service"];
+    // Consulta nova de negócio: ou entra nesta lista respondendo as duas
+    // perguntas, ou não entra.
+    const VITRINE = [
+      "/api/v3/membership",
+      "/api/v1/service",
+      "/api/v1/activities",
+      "/api/v1/activities/schedule"
+    ];
 
     const built = preset();
     if (!built.ok) throw new Error(built.error);
 
     for (const tool of built.manifest.tools) {
       if (tool.scope === "customer") continue;
-      expect(PRECO).toContain(tool.path);
+      expect(VITRINE).toContain(tool.path);
     }
+  });
+
+  it("todo manifesto sai carimbado com a versão do preset — é o que a regeneração na leitura compara", () => {
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    expect(built.manifest.preset).toEqual({ name: "evo", version: EVO_PRESET_VERSION });
+    // Manifesto sem carimbo com a forma da EVO é a ativação de antes: v1, e está velho.
+    const { preset: _semCarimbo, ...antigo } = built.manifest;
+    expect(isStaleEvoManifest(antigo as typeof built.manifest)).toBe(true);
+    expect(isStaleEvoManifest(built.manifest)).toBe(false);
+  });
+
+  it("toda consulta de NEGÓCIO declara validade de cache; nenhuma de cliente declara", () => {
+    // Preço e grade são os mesmos para todo cliente: uma resposta serve a todos,
+    // e a academia deixa de pagar uma chamada à EVO por turno. O que é de UMA
+    // pessoa não pode ser servido a outra — o esquema já recusa, e este teste
+    // garante que o preset não tenta.
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    for (const tool of built.manifest.tools) {
+      if (tool.scope === "business") expect(tool.cacheTtlS ?? 0).toBeGreaterThan(0);
+      else expect(tool.cacheTtlS).toBeUndefined();
+    }
+    // A grade muda toda semana e a tabela de preço quase nunca: validades diferentes.
+    const grade = built.manifest.tools.find((t) => t.name === "evo_grade_de_aulas")!;
+    const planos = built.manifest.tools.find((t) => t.name === "evo_planos_e_precos")!;
+    expect(grade.cacheTtlS!).toBeLessThan(planos.cacheTtlS!);
+  });
+
+  it("a grade de aulas de NEGÓCIO nunca carrega idMember — é o que a separa da irmã escopada", () => {
+    // `/activities/schedule` serve duas ferramentas: `evo_minhas_aulas` (customer,
+    // resolve `idMember` pelo telefone) e `evo_grade_de_aulas` (business, a
+    // semana inteira da academia). A segunda só é de negócio enquanto nenhum
+    // identificador de pessoa entrar na query — nem fixo, nem por parâmetro.
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    const grade = built.manifest.tools.find((t) => t.name === "evo_grade_de_aulas")!;
+
+    expect(grade.scope).toBe("business");
+    expect(grade.resolve).toBeUndefined();
+    expect(Object.keys(grade.query)).not.toContain("idMember");
+    expect(grade.params.map((p) => p.name)).not.toContain("idMember");
+    expect(grade.query.showFullWeek).toBe("true");
   });
 
   it("nenhuma rota do INVENTÁRIO PROIBIDO entra no preset", () => {
@@ -269,7 +327,9 @@ describe("recorte por classe de consulta", () => {
 
     expect(built.manifest.tools.map((t) => t.name)).toEqual([
       "evo_planos_e_precos",
-      "evo_servicos_e_precos"
+      "evo_servicos_e_precos",
+      "evo_modalidades",
+      "evo_grade_de_aulas"
     ]);
   });
 
@@ -291,7 +351,7 @@ describe("recorte por classe de consulta", () => {
   it("o default continua sendo tudo — o recorte é opt-in", () => {
     const todas = preset();
     if (!todas.ok) throw new Error(todas.error);
-    expect(todas.manifest.tools.length).toBe(8);
+    expect(todas.manifest.tools.length).toBe(10);
     expect(todas.manifest.tools.some((t) => t.scope === "customer")).toBe(true);
     expect(preset({ include: "all" }).ok).toBe(true);
   });
@@ -456,6 +516,57 @@ describe("as ferramentas contra respostas no formato real da EVO", () => {
       expect(url).not.toContain("idMember");
       expect(result.content[0].text).toContain("Serviço: Avaliação física");
     });
+  });
+
+  it("evo_modalidades lista a vitrine de aulas, sem pessoa alguma no fio", async () => {
+    // Formato do swagger (`ActivitiesApiViewModel[]`); `root` também cobre o
+    // envelope `{ list }` que a API viva costuma devolver (ver planos, acima).
+    const fetchMock = vi.fn().mockResolvedValue(
+      json({
+        list: [
+          { idActivity: 1, name: "Spinning", description: "Sala exclusiva com 20 bikes", activityGroup: "Aeróbico", audience: "Adultos", inactive: false },
+          { idActivity: 2, name: "Muay Thai", description: null, activityGroup: "Lutas", audience: "Adultos", inactive: false }
+        ]
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runTool(manifest!, tool("evo_modalidades"), { search: "spin" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toBe(`${EVO_BASE_URL}/api/v1/activities?take=50&idBranch=3&search=spin`);
+    expect(url).not.toContain("phone");
+    expect(url).not.toContain("idMember");
+    const linhas = result.content[0].text.split("\n");
+    expect(linhas[0]).toBe("Modalidade: Spinning · Descrição: Sala exclusiva com 20 bikes · Grupo: Aeróbico · Público: Adultos");
+    expect(linhas[1]).toBe("Modalidade: Muay Thai · Grupo: Lutas · Público: Adultos");
+  });
+
+  it("evo_grade_de_aulas devolve a semana da academia — sem idMember, com a data que o cliente citou", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json([
+        { idConfiguration: 10, name: "Fit Dance", activityDate: "2026-10-21T00:00:00", startTime: "19:00", endTime: "20:00", instructor: "Carla", area: "Sala 2", capacity: 30, ocupation: 12 },
+        { idConfiguration: 11, name: "Spinning", activityDate: "2026-10-21T00:00:00", startTime: "20:00", endTime: "20:45", instructor: "Diego", area: "Sala de bike", capacity: 20, ocupation: 20 }
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runTool(manifest!, tool("evo_grade_de_aulas"), { date: "2026-10-21" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toBe(
+      `${EVO_BASE_URL}/api/v1/activities/schedule?showFullWeek=true&onlyAvailables=false&take=60&idBranch=3&date=2026-10-21`
+    );
+    expect(url).not.toContain("idMember");
+    expect(url).not.toContain("phone");
+    const linhas = result.content[0].text.split("\n");
+    expect(linhas[0]).toBe("Aula: Fit Dance · Data: 2026-10-21T00:00:00 · Início: 19:00 · Fim: 20:00 · Professor: Carla · Sala: Sala 2");
+    expect(linhas).toHaveLength(2);
+    // Lotação e vagas ficam fora da projeção: o agente não vende vaga em aula.
+    expect(result.content[0].text).not.toContain("capacity");
+    expect(result.content[0].text).not.toContain("20/20");
   });
 
   it("aluno sem cadastro na EVO não vira consulta ao financeiro da academia inteira", async () => {

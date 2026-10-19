@@ -176,14 +176,104 @@ async function runResolve(
  * Exportada porque é onde está o comportamento que vale testar — o registro no
  * servidor MCP é só a amarração.
  */
+/**
+ * O cache das consultas de NEGÓCIO — o subconjunto de `KVNamespace` que ele usa.
+ *
+ * Por que existe: a tabela de preço, as modalidades e a grade são as mesmas
+ * para todo cliente do tenant, e cada turno que as consultava pagava uma
+ * chamada à EVO — e herdava toda instabilidade dela. Com o cache, dentro da
+ * validade (`cacheTtlS` da ferramenta) ninguém vai ao fio; vencida, a consulta
+ * é refeita, e se a EVO falhar nessa hora a resposta ANTERIOR é servida, com a
+ * idade declarada no texto, por até {@link STALE_MAX_S}. Falha nunca é gravada.
+ *
+ * O que ele NÃO faz, por construção: consulta `customer` não passa por aqui
+ * (o esquema recusa `cacheTtlS` fora de `business`), então o que é de uma
+ * pessoa nunca é servido a outra. A chave carrega tenant, ferramenta e os
+ * argumentos — dois tenants com a mesma consulta nunca se enxergam.
+ */
+export interface ToolCache {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+}
+
+/** Até quando uma resposta vencida ainda vale mais do que nenhuma, quando a API falha. */
+export const STALE_MAX_S = 24 * 60 * 60;
+const CACHE_PREFIX = "tool-cache:";
+
+interface CacheEntry {
+  readonly text: string;
+  readonly fetchedAt: number;
+}
+
+async function cacheKey(manifest: TenantManifest, tool: TenantTool, args: Record<string, string | undefined>): Promise<string> {
+  // Só os parâmetros DECLARADOS entram na chave, em ordem fixa: um argumento
+  // extra que o modelo inventasse não produz uma entrada nova por turno.
+  const declared = tool.params.map((p) => `${p.name}=${(args[p.name] ?? "").trim().toLowerCase()}`).join("&");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(declared));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${CACHE_PREFIX}${manifest.tenantId}:${tool.name}:${hex}`;
+}
+
+const cacheable = (tool: TenantTool): boolean => tool.scope === "business" && (tool.cacheTtlS ?? 0) > 0;
+
+async function readCache(cache: ToolCache, key: string): Promise<CacheEntry | null> {
+  try {
+    const raw = await cache.get(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CacheEntry>;
+    if (typeof parsed.text !== "string" || typeof parsed.fetchedAt !== "number") return null;
+    return { text: parsed.text, fetchedAt: parsed.fetchedAt };
+  } catch {
+    // Cache ilegível é cache ausente: a consulta vai ao fio como sempre foi.
+    return null;
+  }
+}
+
+const ageLabel = (ageMs: number): string => {
+  const min = Math.max(1, Math.round(ageMs / 60_000));
+  return min < 60 ? `${min} min` : `${Math.round(min / 60)} h`;
+};
+
 export async function runTool(
   manifest: TenantManifest,
   tool: TenantTool,
   args: Record<string, string | undefined>,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  cache?: ToolCache
 ): Promise<ToolResult> {
   const missing = missingRequired(tool, args);
   if (missing) return fail(`Faltou o parâmetro obrigatório "${missing}".`);
+
+  if (cache && cacheable(tool)) {
+    const key = await cacheKey(manifest, tool, args);
+    const hit = await readCache(cache, key);
+    const ageMs = hit ? now() - hit.fetchedAt : Number.POSITIVE_INFINITY;
+    if (hit && ageMs <= (tool.cacheTtlS ?? 0) * 1000) return ok(hit.text);
+
+    const live = await runToolLive(manifest, tool, args, now);
+    if (!live.isError) {
+      const entry: CacheEntry = { text: live.content[0].text, fetchedAt: now() };
+      // A entrada vive até o teto do vencido, não só até o TTL: é o que permite
+      // servi-la quando a API falhar depois de vencida. O TTL fresco é checado
+      // na leitura, pela idade.
+      await cache.put(key, JSON.stringify(entry), { expirationTtl: STALE_MAX_S }).catch(() => undefined);
+      return live;
+    }
+    if (hit && ageMs <= STALE_MAX_S * 1000) {
+      return ok(`${hit.text}\nObservação: dados consultados há ${ageLabel(ageMs)}; o sistema da academia não respondeu agora.`);
+    }
+    return live;
+  }
+
+  return runToolLive(manifest, tool, args, now);
+}
+
+async function runToolLive(
+  manifest: TenantManifest,
+  tool: TenantTool,
+  args: Record<string, string | undefined>,
+  now: () => number
+): Promise<ToolResult> {
 
   // `timeoutMs` é o orçamento da FERRAMENTA, não de um salto. Com resolução são
   // dois saltos seriais, e o que importa é caber no teto que o backend concede à
@@ -260,7 +350,7 @@ export function asStringArgs(args: Record<string, unknown>): Record<string, stri
  * Registra, neste servidor, as ferramentas DESTE tenant — e de nenhum outro.
  * O chamador já resolveu o manifesto a partir do token da requisição.
  */
-export function registerTenantTools(server: McpServer, manifest: TenantManifest): void {
+export function registerTenantTools(server: McpServer, manifest: TenantManifest, cache?: ToolCache): void {
   for (const tool of manifest.tools) {
     server.registerTool(
       tool.name,
@@ -269,7 +359,7 @@ export function registerTenantTools(server: McpServer, manifest: TenantManifest)
       // então ele não tem como inferir a forma). A normalização a string acontece
       // aqui, num lugar só, em vez de cada `runTool` desconfiar do próprio
       // argumento.
-      async (args: Record<string, unknown>) => runTool(manifest, tool, asStringArgs(args))
+      async (args: Record<string, unknown>) => runTool(manifest, tool, asStringArgs(args), Date.now, cache)
     );
   }
 }

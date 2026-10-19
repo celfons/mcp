@@ -327,8 +327,30 @@ tradução manual e a promessa de "colável" seria falsa.
 | `evo_minhas_aulas` | customer | `GET /api/v1/activities/schedule` | → `idMember` |
 | `evo_planos_e_precos` | business | `GET /api/v3/membership` | — |
 | `evo_servicos_e_precos` | business | `GET /api/v1/service` | — |
+| `evo_modalidades` | business | `GET /api/v1/activities` | — |
+| `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` (semana inteira, sem `idMember`) | — |
 
-Com `"include": "business"`, só as duas últimas são anunciadas.
+Com `"include": "business"`, só as quatro últimas são anunciadas.
+
+> **Manifesto de preset é derivado do código.** Todo manifesto que o preset emite sai
+> carimbado com `preset: { name: "evo", version }` (`EVO_PRESET_VERSION`). Ao resolver o
+> tenant, o gateway compara o carimbo gravado com a versão do deploy corrente e, se o
+> gravado é mais velho (ou não tem carimbo, que é a ativação de antes), **regera na hora**
+> reaproveitando a credencial, a unidade, o recorte e o rótulo, e grava de volta. Uma
+> consulta nova do preset chega a toda academia já ativada na primeira mensagem depois
+> do deploy — sem rota de admin, sem token, sem operador. Manifesto colado à mão (sem
+> carimbo e sem a forma da EVO) nunca é tocado. Suba `EVO_PRESET_VERSION` a cada
+> mudança no conjunto de consultas.
+>
+> Para **forçar** a regeneração fora desse fluxo há a rota de admin, que faz a mesma
+> coisa sob demanda e devolve o diff (`added`/`removed`) e a `tool_policy`:
+>
+> ```bash
+> curl -X POST $GATEWAY/admin/tenants/tnt_gym/preset/evo/refresh \
+>   -H "Authorization: Bearer $ADMIN_TOKEN"
+> ```
+>
+> Responde 409 se o manifesto do tenant não veio do preset.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.
@@ -338,17 +360,41 @@ O preset usa `/api/v1/members/basic`, **não** `/api/v2/members`: o v2 devolve `
 prompt, mas o que não sai da EVO não precisa de projeção — é uma camada de PII a menos
 atravessando o fio.
 
+### Cache das consultas de negócio
+
+Preço, serviços, modalidades e grade são os mesmos para todo cliente do tenant. Sem cache,
+cada turno que os consultava pagava uma chamada à EVO e herdava toda instabilidade dela.
+Cada consulta `business` do preset declara `cacheTtlS` (planos e serviços 1 h, modalidades
+6 h, grade 15 min); o gateway guarda a resposta projetada no KV, sob
+`tool-cache:<tenantId>:<ferramenta>:<hash dos argumentos>`, e:
+
+- dentro da validade, ninguém vai ao fio;
+- vencida, consulta de novo e regrava;
+- vencida **e com a EVO fora**, serve a resposta anterior com a idade declarada no texto
+  ("dados consultados há 2 h; o sistema da academia não respondeu agora"), por até 24 h.
+  Falha nunca é gravada.
+
+Consulta `customer` nunca passa pelo cache: o esquema recusa `cacheTtlS` fora de
+`business`. O que é de uma pessoa (plano dela, cobranças) muda quando ela paga e não pode
+ser servido a ninguém mais — cache é a forma mais fácil de vazar entre clientes do mesmo
+tenant, e o jeito de não vazar é não existir.
+
 ### A regra: duas classes, e não há terceira
 
-**(a) fala do cliente que perguntou, ou (b) é plano e preço.** É uma allowlist, e o que
-está fora não está fora por ser perigoso — grade de aulas, modalidades, endereço, horário
-e convênios são todos inofensivos. Estão fora porque allowlist que aceita "isso também é
-inofensivo" deixa de ser allowlist em três meses. E porque quase tudo dessa lista é
-**quase estático**: mora mais barato no contexto que o dono escreve no portal do agente,
-sem custar uma consulta viva e uma chamada de LLM por turno.
+**(a) fala do cliente que perguntou, ou (b) é a vitrine** — o que a academia poria na
+parede da recepção: plano e serviço com valor, modalidades, grade de aulas. É uma
+allowlist, e cada entrada responde duas perguntas: *o dono poria isso na vitrine?* e
+*muda rápido demais para morar no briefing?* Preço respondeu as duas desde o início.
+Modalidades e grade entraram em 19/10/2026 por uma medição (Tier-3 do Jardim Helena:
+"spinning está incluso?" e "qual a grade?" tiraram duas personas do automático), e grade
+de aula muda toda semana — mora na EVO, onde a academia a mantém. Endereço, horário de
+funcionamento e convênios continuam fora: **quase estáticos**, moram mais barato no
+contexto que o dono escreve no portal do agente, sem custar uma consulta viva e uma
+chamada de LLM por turno. Allowlist que aceita "isso também é inofensivo" deixa de ser
+allowlist em três meses — por isso cada entrada tem de responder as duas perguntas.
 
 `tests/evoPreset.test.ts` codifica a regra: consulta `business` cujo caminho não está na
-lista de preço quebra o CI.
+lista da vitrine quebra o CI.
 
 ### Por que não "todo GET"
 
