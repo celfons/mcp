@@ -1,6 +1,11 @@
 import { parseManifest, type TenantManifest } from "./manifest";
 import { hashToken } from "./store";
-import { buildEvoManifest, evoToolPolicy } from "./presets/evo";
+import {
+  buildEvoManifest,
+  buildEvoManifestWithAuthorization,
+  evoPresetInputFromManifest,
+  evoToolPolicy
+} from "./presets/evo";
 
 /**
  * A rota de administração dos manifestos.
@@ -223,6 +228,58 @@ export async function putEvoPreset(
 }
 
 /** `DELETE /admin/tenants/:tenantId/manifest` — o tenant deixa de ser alcançável. */
+/**
+ * `POST /admin/tenants/:tenantId/preset/evo/refresh`
+ *
+ * Regera o manifesto de uma academia JÁ ativada com o preset atual, reaproveitando
+ * a credencial, a unidade, o recorte e o rótulo que estão gravados. Existe porque
+ * o manifesto é gerado na ativação e fica parado no KV: uma consulta nova no
+ * preset não chega a quem ativou antes dela. Sem esta rota, chegar exigia o
+ * `PUT` inteiro de novo — com o DNS e a chave da EVO atravessando mais um
+ * terminal para dizer o que o KV já sabia.
+ *
+ * Não toca no índice do token: o token da plataforma continua resolvendo o
+ * mesmo tenant, então nada muda do lado do WhatsApp.
+ */
+export async function refreshEvoPreset(request: Request, env: Env, tenantId: string): Promise<AdminResult> {
+  const denied = authorize(request, env);
+  if (denied) return denied;
+
+  const kv = store(env);
+  if (!kv) return json(503, { error: "KV de manifestos não está configurado." });
+  if (!tenantId) return json(400, { error: "tenantId é obrigatório." });
+
+  const raw = await kv.get(`${MANIFEST_PREFIX}${tenantId}`, "json");
+  if (raw === null) return json(404, { error: "Nenhum manifesto cadastrado para este tenant." });
+  const stored = parseManifest(raw);
+  if (!stored.ok) return json(500, { error: `O manifesto gravado está inválido — ${stored.error}` });
+
+  const recovered = evoPresetInputFromManifest(stored.manifest);
+  if (!recovered.ok) {
+    // 409, e não 400: a requisição está certa, é o ESTADO gravado que não é um
+    // preset — regerar por cima apagaria um manifesto colado à mão.
+    return json(409, { error: `Este tenant não foi ativado pelo preset da EVO — ${recovered.error}` });
+  }
+
+  const built = buildEvoManifestWithAuthorization(recovered.input);
+  if (!built.ok) return json(500, { error: `Preset EVO inválido — ${built.error}` });
+
+  await persist(kv, built.manifest, "");
+
+  const before = new Set(stored.manifest.tools.map((t) => t.name));
+  const after = new Set(built.manifest.tools.map((t) => t.name));
+  return json(200, {
+    tenantId,
+    preset: "evo",
+    include: recovered.input.include ?? "all",
+    ...(recovered.input.idBranch === undefined ? {} : { idBranch: recovered.input.idBranch }),
+    tools: built.manifest.tools.map((t) => ({ name: t.name, scope: t.scope })),
+    added: [...after].filter((n) => !before.has(n)),
+    removed: [...before].filter((n) => !after.has(n)),
+    toolPolicy: evoToolPolicy(built.manifest)
+  });
+}
+
 export async function deleteManifest(
   request: Request,
   env: Env,

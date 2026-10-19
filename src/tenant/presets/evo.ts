@@ -167,6 +167,62 @@ export function basicAuthValue(user: string, password: string): string {
  * gravação, com nome, em vez de na primeira pergunta de um cliente.
  */
 export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
+  const { dns, secretKey, ...rest } = input;
+  return buildEvoManifestWithAuthorization({ ...rest, authorization: basicAuthValue(dns, secretKey) });
+}
+
+/** O preset com a credencial JÁ montada — o que um manifesto gravado carrega. */
+export type EvoPresetAuthorizedInput = Omit<EvoPresetInput, "dns" | "secretKey"> & {
+  /** O valor completo do header `Authorization` (`Basic …`). */
+  authorization: string;
+};
+
+/**
+ * Recupera, de um manifesto EVO gravado, a entrada que o gerou — menos DNS e
+ * chave, que não são recuperáveis (e não precisam ser: o header `Basic` pronto
+ * é tudo o que a próxima geração consome).
+ *
+ * É o que permite REGERAR as consultas de uma academia já ativada quando o
+ * preset ganha uma consulta nova, sem pedir a credencial de novo. O manifesto
+ * no KV é gerado na ativação; sem isto, cada consulta nova do preset exigiria
+ * do operador o `PUT` inteiro, com o segredo da EVO passando por mais um
+ * terminal.
+ *
+ * Devolve erro, e não um palpite, quando o manifesto não tem a forma que este
+ * preset emite: outro host, outro esquema de auth. Regerar por cima de um
+ * manifesto colado à mão apagaria o que o operador escreveu.
+ */
+export function evoPresetInputFromManifest(
+  stored: TenantManifest
+): { ok: true; input: EvoPresetAuthorizedInput } | { ok: false; error: string } {
+  if (stored.baseUrl !== EVO_BASE_URL) {
+    return { ok: false, error: `baseUrl "${stored.baseUrl}" não é a da EVO — este manifesto não veio do preset.` };
+  }
+  if (stored.auth.type !== "header" || stored.auth.name !== "Authorization" || !stored.auth.value.startsWith("Basic ")) {
+    return { ok: false, error: "a credencial gravada não é o Basic da EVO — este manifesto não veio do preset." };
+  }
+  // A unidade pinada mora na query fixa de toda consulta; basta a primeira.
+  const pinned = stored.tools.map((t) => t.query.idBranch).find((v) => v !== undefined);
+  const idBranch = pinned === undefined ? undefined : Number.parseInt(pinned, 10);
+  if (pinned !== undefined && !Number.isInteger(idBranch)) {
+    return { ok: false, error: `idBranch gravado ("${pinned}") não é inteiro.` };
+  }
+  return {
+    ok: true,
+    input: {
+      tenantId: stored.tenantId,
+      label: stored.label,
+      authorization: stored.auth.value,
+      timeoutMs: stored.timeoutMs,
+      // O recorte é recuperado pelo que foi ANUNCIADO, não por uma flag gravada:
+      // academia sem nenhuma consulta de aluno é academia ativada em `business`.
+      include: stored.tools.some((t) => t.scope === "customer") ? "all" : "business",
+      ...(idBranch === undefined ? {} : { idBranch })
+    }
+  };
+}
+
+export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInput): ManifestParseResult {
   const branch = input.idBranch === undefined ? {} : { idBranch: String(input.idBranch) };
   const label = input.label?.trim() || "EVO";
   // A filtragem é por `scope` declarado, e não por uma segunda lista de nomes:
@@ -181,7 +237,7 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
     auth: {
       type: "header",
       name: "Authorization",
-      value: basicAuthValue(input.dns, input.secretKey)
+      value: input.authorization
     },
     // Abaixo do teto de 4 s que o backend concede a uma chamada, com folga para
     // os dois saltos das ferramentas que resolvem.

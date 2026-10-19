@@ -333,9 +333,19 @@ tradução manual e a promessa de "colável" seria falsa.
 Com `"include": "business"`, só as quatro últimas são anunciadas.
 
 > Preset novo não muda manifesto já gravado: o manifesto mora no KV e é gerado **na
-> ativação**. Uma academia ativada antes de uma consulta entrar no preset precisa do
-> `PUT …/preset/evo` de novo (mesmos `dns` e `secretKey`) e da regra correspondente na
-> `tool_policy` da plataforma.
+> ativação**. Uma academia ativada antes de uma consulta entrar no preset recebe a
+> consulta com o **refresh**, que regera o manifesto com o preset atual reaproveitando a
+> credencial, a unidade, o recorte e o rótulo gravados — sem DNS nem chave de novo, e
+> sem tocar no token da plataforma:
+>
+> ```bash
+> curl -X POST $GATEWAY/admin/tenants/tnt_gym/preset/evo/refresh \
+>   -H "Authorization: Bearer $ADMIN_TOKEN"
+> ```
+>
+> A resposta diz o que entrou (`added`) e o que saiu (`removed`) e devolve a `tool_policy`
+> nova para colar na plataforma. Responde 409 se o manifesto do tenant não veio do preset
+> (foi colado à mão): regerar por cima apagaria o que o operador escreveu.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.

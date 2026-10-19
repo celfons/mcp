@@ -11,7 +11,7 @@ import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
 import { registerTenantTools } from "./tenant/gateway";
 import { resolveTenant, type ResolvedTenant } from "./tenant/store";
-import { putManifest, deleteManifest, getManifest, putEvoPreset } from "./tenant/admin";
+import { putManifest, deleteManifest, getManifest, putEvoPreset, refreshEvoPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
 
@@ -191,15 +191,20 @@ export default {
     // Ativação por PRESET: o manifesto é gerado de um punhado de campos, para a
     // API que muitos tenants compartilham. Casa antes da rota de manifesto
     // porque é mais específica.
-    const preset = /^\/admin\/tenants\/([^/]+)\/preset\/([a-z0-9-]+)$/.exec(path);
+    const preset = /^\/admin\/tenants\/([^/]+)\/preset\/([a-z0-9-]+)(\/refresh)?$/.exec(path);
     if (preset) {
       const tenantId = decodeURIComponent(preset[1]);
+      const refresh = preset[3] !== undefined;
       const result =
-        request.method !== "PUT"
-          ? { status: 405, body: { error: "Método não suportado." } }
-          : preset[2] === "evo"
-            ? await putEvoPreset(request, env, tenantId)
-            : { status: 404, body: { error: `Preset "${preset[2]}" não existe.` } };
+        preset[2] !== "evo"
+          ? { status: 404, body: { error: `Preset "${preset[2]}" não existe.` } }
+          : refresh
+            ? request.method === "POST"
+              ? await refreshEvoPreset(request, env, tenantId)
+              : { status: 405, body: { error: "Método não suportado." } }
+            : request.method === "PUT"
+              ? await putEvoPreset(request, env, tenantId)
+              : { status: 405, body: { error: "Método não suportado." } };
       return new Response(JSON.stringify(result.body), {
         status: result.status,
         headers: { "Content-Type": "application/json" }
