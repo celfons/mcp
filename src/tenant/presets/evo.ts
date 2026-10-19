@@ -354,6 +354,68 @@ export function buildEvoManifest(input: EvoPresetInput): ManifestParseResult {
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
         maxChars: 1200
+      },
+      // ---- A VITRINE: modalidades e grade de aulas ---------------------------
+      //
+      // Entraram depois do preço, e por uma medição, não por "também é
+      // inofensivo": no Tier-3 do Jardim Helena (19/10/2026) as duas personas
+      // que perguntaram "spinning está incluso?" e "qual a grade?" saíram do
+      // automático — o briefing não carregava a resposta, e grade de aula não
+      // é quase-estática como endereço: muda toda semana e mora na EVO, que é
+      // onde a academia a mantém. As duas são sobre o NEGÓCIO: nenhuma fala de
+      // pessoa, nenhuma recebe telefone, nenhuma resolve `idMember`.
+      {
+        name: "evo_modalidades",
+        description: "Modalidades e aulas que a academia oferece, com descrição e grupo (musculação, spinning, lutas, dança).",
+        path: "/api/v1/activities",
+        scope: "business",
+        params: [
+          {
+            name: "search",
+            in: "query",
+            description: "Filtra por nome da modalidade ou do grupo, quando o cliente citar um."
+          }
+        ],
+        query: { take: "50", ...branch },
+        // Mesmos candidatos de `evo_planos_e_precos`: o swagger declara array e a
+        // API viva tende ao envelope `{ list, lista }`.
+        root: ["list", "lista", "$"],
+        fields: [
+          { path: "[].name", label: "Modalidade" },
+          { path: "[].description", label: "Descrição" },
+          { path: "[].activityGroup", label: "Grupo" },
+          { path: "[].audience", label: "Público" }
+        ],
+        maxChars: 1500
+      },
+      {
+        name: "evo_grade_de_aulas",
+        description: "Grade de aulas da academia: aula, dia, horário, professor e sala. Sem data, a semana corrente.",
+        path: "/api/v1/activities/schedule",
+        scope: "business",
+        params: [
+          {
+            name: "date",
+            in: "query",
+            description: "Dia da grade no formato AAAA-MM-DD, quando o cliente citar um; sem data, a semana corrente."
+          }
+        ],
+        // `showFullWeek` devolve domingo a sábado em volta da data (ou de hoje);
+        // SEM `idMember`, que é o que faz esta consulta ser sobre a academia e
+        // não sobre um aluno — `evo_minhas_aulas` é a irmã escopada.
+        query: { showFullWeek: "true", onlyAvailables: "false", take: "60", ...branch },
+        root: ["list", "lista", "$"],
+        fields: [
+          { path: "[].name", label: "Aula" },
+          { path: "[].activityDate", label: "Data" },
+          { path: "[].startTime", label: "Início" },
+          { path: "[].endTime", label: "Fim" },
+          { path: "[].instructor", label: "Professor" },
+          { path: "[].area", label: "Sala" }
+        ],
+        // O teto do esquema: uma semana inteira de grade é a consulta mais longa
+        // do preset, e o que não couber é cortado pelo projetor, nunca inventado.
+        maxChars: 1800
       }
     ].filter((tool) => keep(tool.scope))
   });

@@ -327,8 +327,15 @@ tradução manual e a promessa de "colável" seria falsa.
 | `evo_minhas_aulas` | customer | `GET /api/v1/activities/schedule` | → `idMember` |
 | `evo_planos_e_precos` | business | `GET /api/v3/membership` | — |
 | `evo_servicos_e_precos` | business | `GET /api/v1/service` | — |
+| `evo_modalidades` | business | `GET /api/v1/activities` | — |
+| `evo_grade_de_aulas` | business | `GET /api/v1/activities/schedule` (semana inteira, sem `idMember`) | — |
 
-Com `"include": "business"`, só as duas últimas são anunciadas.
+Com `"include": "business"`, só as quatro últimas são anunciadas.
+
+> Preset novo não muda manifesto já gravado: o manifesto mora no KV e é gerado **na
+> ativação**. Uma academia ativada antes de uma consulta entrar no preset precisa do
+> `PUT …/preset/evo` de novo (mesmos `dns` e `secretKey`) e da regra correspondente na
+> `tool_policy` da plataforma.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.
@@ -340,15 +347,20 @@ atravessando o fio.
 
 ### A regra: duas classes, e não há terceira
 
-**(a) fala do cliente que perguntou, ou (b) é plano e preço.** É uma allowlist, e o que
-está fora não está fora por ser perigoso — grade de aulas, modalidades, endereço, horário
-e convênios são todos inofensivos. Estão fora porque allowlist que aceita "isso também é
-inofensivo" deixa de ser allowlist em três meses. E porque quase tudo dessa lista é
-**quase estático**: mora mais barato no contexto que o dono escreve no portal do agente,
-sem custar uma consulta viva e uma chamada de LLM por turno.
+**(a) fala do cliente que perguntou, ou (b) é a vitrine** — o que a academia poria na
+parede da recepção: plano e serviço com valor, modalidades, grade de aulas. É uma
+allowlist, e cada entrada responde duas perguntas: *o dono poria isso na vitrine?* e
+*muda rápido demais para morar no briefing?* Preço respondeu as duas desde o início.
+Modalidades e grade entraram em 19/10/2026 por uma medição (Tier-3 do Jardim Helena:
+"spinning está incluso?" e "qual a grade?" tiraram duas personas do automático), e grade
+de aula muda toda semana — mora na EVO, onde a academia a mantém. Endereço, horário de
+funcionamento e convênios continuam fora: **quase estáticos**, moram mais barato no
+contexto que o dono escreve no portal do agente, sem custar uma consulta viva e uma
+chamada de LLM por turno. Allowlist que aceita "isso também é inofensivo" deixa de ser
+allowlist em três meses — por isso cada entrada tem de responder as duas perguntas.
 
 `tests/evoPreset.test.ts` codifica a regra: consulta `business` cujo caminho não está na
-lista de preço quebra o CI.
+lista da vitrine quebra o CI.
 
 ### Por que não "todo GET"
 
