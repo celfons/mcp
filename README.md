@@ -355,6 +355,25 @@ O preset usa `/api/v1/members/basic`, **não** `/api/v2/members`: o v2 devolve `
 prompt, mas o que não sai da EVO não precisa de projeção — é uma camada de PII a menos
 atravessando o fio.
 
+### Cache das consultas de negócio
+
+Preço, serviços, modalidades e grade são os mesmos para todo cliente do tenant. Sem cache,
+cada turno que os consultava pagava uma chamada à EVO e herdava toda instabilidade dela.
+Cada consulta `business` do preset declara `cacheTtlS` (planos e serviços 1 h, modalidades
+6 h, grade 15 min); o gateway guarda a resposta projetada no KV, sob
+`tool-cache:<tenantId>:<ferramenta>:<hash dos argumentos>`, e:
+
+- dentro da validade, ninguém vai ao fio;
+- vencida, consulta de novo e regrava;
+- vencida **e com a EVO fora**, serve a resposta anterior com a idade declarada no texto
+  ("dados consultados há 2 h; o sistema da academia não respondeu agora"), por até 24 h.
+  Falha nunca é gravada.
+
+Consulta `customer` nunca passa pelo cache: o esquema recusa `cacheTtlS` fora de
+`business`. O que é de uma pessoa (plano dela, cobranças) muda quando ela paga e não pode
+ser servido a ninguém mais — cache é a forma mais fácil de vazar entre clientes do mesmo
+tenant, e o jeito de não vazar é não existir.
+
 ### A regra: duas classes, e não há terceira
 
 **(a) fala do cliente que perguntou, ou (b) é a vitrine** — o que a academia poria na

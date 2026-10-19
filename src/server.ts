@@ -106,12 +106,14 @@ const SERVERS: Record<
  * credenciais estão configuradas — informação de operação, inofensiva num
  * endpoint nosso e indevida num endpoint que um tenant alcança.
  */
-function createTenantServer(tenant: ResolvedTenant) {
+function createTenantServer(tenant: ResolvedTenant, env: Env) {
   const server = new McpServer({
     name: `Tenant API Gateway — ${tenant.manifest.label}`,
     version: VERSION
   });
-  registerTenantTools(server, tenant.manifest);
+  // O cache das consultas de negócio mora no MESMO namespace dos manifestos,
+  // sob prefixo próprio (`tool-cache:`), para não exigir um binding novo.
+  registerTenantTools(server, tenant.manifest, env.TENANT_MANIFESTS ?? undefined);
   return server;
 }
 
@@ -241,7 +243,7 @@ export default {
           headers: { "Content-Type": "application/json" }
         });
       }
-      return createMcpHandler(() => createTenantServer(resolved.tenant), { route: TENANT_PATH })(
+      return createMcpHandler(() => createTenantServer(resolved.tenant, env), { route: TENANT_PATH })(
         request,
         env,
         ctx

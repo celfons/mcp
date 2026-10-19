@@ -114,6 +114,23 @@ describe("o preset emite um manifesto que o esquema aceita", () => {
     }
   });
 
+  it("toda consulta de NEGÓCIO declara validade de cache; nenhuma de cliente declara", () => {
+    // Preço e grade são os mesmos para todo cliente: uma resposta serve a todos,
+    // e a academia deixa de pagar uma chamada à EVO por turno. O que é de UMA
+    // pessoa não pode ser servido a outra — o esquema já recusa, e este teste
+    // garante que o preset não tenta.
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    for (const tool of built.manifest.tools) {
+      if (tool.scope === "business") expect(tool.cacheTtlS ?? 0).toBeGreaterThan(0);
+      else expect(tool.cacheTtlS).toBeUndefined();
+    }
+    // A grade muda toda semana e a tabela de preço quase nunca: validades diferentes.
+    const grade = built.manifest.tools.find((t) => t.name === "evo_grade_de_aulas")!;
+    const planos = built.manifest.tools.find((t) => t.name === "evo_planos_e_precos")!;
+    expect(grade.cacheTtlS!).toBeLessThan(planos.cacheTtlS!);
+  });
+
   it("a grade de aulas de NEGÓCIO nunca carrega idMember — é o que a separa da irmã escopada", () => {
     // `/activities/schedule` serve duas ferramentas: `evo_minhas_aulas` (customer,
     // resolve `idMember` pelo telefone) e `evo_grade_de_aulas` (business, a

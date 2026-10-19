@@ -390,7 +390,8 @@ export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInpu
           { path: "[].durationType", label: "Unidade" },
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
-        maxChars: 1500
+        maxChars: 1500,
+        cacheTtlS: 3600
       },
       {
         name: "evo_servicos_e_precos",
@@ -409,7 +410,8 @@ export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInpu
           { path: "[].value", label: "Valor" },
           { path: "[].maxAmountInstallments", label: "Parcelas" }
         ],
-        maxChars: 1200
+        maxChars: 1200,
+        cacheTtlS: 3600
       },
       // ---- A VITRINE: modalidades e grade de aulas ---------------------------
       //
@@ -442,7 +444,8 @@ export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInpu
           { path: "[].activityGroup", label: "Grupo" },
           { path: "[].audience", label: "Público" }
         ],
-        maxChars: 1500
+        maxChars: 1500,
+        cacheTtlS: 21600
       },
       {
         name: "evo_grade_de_aulas",
@@ -471,7 +474,8 @@ export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInpu
         ],
         // O teto do esquema: uma semana inteira de grade é a consulta mais longa
         // do preset, e o que não couber é cortado pelo projetor, nunca inventado.
-        maxChars: 1800
+        maxChars: 1800,
+        cacheTtlS: 900
       }
     ].filter((tool) => keep(tool.scope))
   });

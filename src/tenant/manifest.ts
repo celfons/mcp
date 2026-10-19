@@ -168,9 +168,26 @@ export const ToolSchema = z
      * Teto do texto devolvido. O backend corta em ~2000; ficar abaixo evita corte
      * no meio.
      */
-    maxChars: z.number().int().min(100).max(1800).default(1200)
+    maxChars: z.number().int().min(100).max(1800).default(1200),
+    /**
+     * Por quantos segundos a resposta projetada pode ser reaproveitada sem
+     * consultar a API de novo. Ausente ou 0 = toda chamada vai ao fio.
+     *
+     * SÓ em escopo `business` (o refine abaixo recusa o resto): a tabela de
+     * preço e a grade de aulas são as mesmas para todo cliente, então uma
+     * resposta serve a todos; o que é de UMA pessoa (plano dela, cobranças)
+     * muda quando ela paga e não pode ser servido a ninguém mais — e o cache
+     * é a forma mais fácil de vazar entre clientes do mesmo tenant.
+     */
+    cacheTtlS: z.number().int().min(0).max(86400).optional()
   })
   .superRefine((tool, ctx) => {
+    if (tool.cacheTtlS && tool.scope !== "business") {
+      ctx.addIssue({
+        code: "custom",
+        message: `ferramenta "${tool.name}": cacheTtlS só existe em escopo business`
+      });
+    }
     const names = tool.params.map((p) => p.name);
     if (new Set(names).size !== names.length) {
       ctx.addIssue({ code: "custom", message: `ferramenta "${tool.name}": parâmetro duplicado` });
