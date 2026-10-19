@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildEvoManifest, evoToolPolicy, basicAuthValue, EVO_BASE_URL } from "../src/tenant/presets/evo";
+import {
+  buildEvoManifest,
+  evoToolPolicy,
+  basicAuthValue,
+  isStaleEvoManifest,
+  EVO_BASE_URL,
+  EVO_PRESET_VERSION
+} from "../src/tenant/presets/evo";
 import { runTool } from "../src/tenant/gateway";
 
 // ---------------------------------------------------------------------------
@@ -112,6 +119,16 @@ describe("o preset emite um manifesto que o esquema aceita", () => {
       if (tool.scope === "customer") continue;
       expect(VITRINE).toContain(tool.path);
     }
+  });
+
+  it("todo manifesto sai carimbado com a versão do preset — é o que a regeneração na leitura compara", () => {
+    const built = preset();
+    if (!built.ok) throw new Error(built.error);
+    expect(built.manifest.preset).toEqual({ name: "evo", version: EVO_PRESET_VERSION });
+    // Manifesto sem carimbo com a forma da EVO é a ativação de antes: v1, e está velho.
+    const { preset: _semCarimbo, ...antigo } = built.manifest;
+    expect(isStaleEvoManifest(antigo as typeof built.manifest)).toBe(true);
+    expect(isStaleEvoManifest(built.manifest)).toBe(false);
   });
 
   it("toda consulta de NEGÓCIO declara validade de cache; nenhuma de cliente declara", () => {

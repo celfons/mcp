@@ -284,7 +284,15 @@ export const ManifestSchema = z.object({
   auth: AuthSchema.default({ type: "none" }),
   tools: z.array(ToolSchema).min(1).max(24),
   /** Teto por chamada à API do cliente. Abaixo dos 4s que o backend concede ao leg. */
-  timeoutMs: z.number().int().min(500).max(3500).default(3000)
+  timeoutMs: z.number().int().min(500).max(3500).default(3000),
+  /**
+   * O carimbo de quem GEROU este manifesto. Ausente = colado à mão, e o gateway
+   * nunca toca nele. Presente, o gateway compara a versão com a do preset no
+   * deploy corrente e regera o manifesto na leitura quando o gravado é mais
+   * velho — é o que faz uma consulta nova do preset chegar a toda academia já
+   * ativada, sem rota de admin.
+   */
+  preset: z.object({ name: z.literal("evo"), version: z.number().int().min(1) }).optional()
 });
 
 export type TenantManifest = z.infer<typeof ManifestSchema>;

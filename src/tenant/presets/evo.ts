@@ -71,6 +71,21 @@ import { parseManifest, type ManifestParseResult, type TenantManifest } from "..
 export const EVO_BASE_URL = "https://evo-integracao-api.w12app.com.br";
 
 /**
+ * A versão do preset, carimbada em todo manifesto que ele emite.
+ *
+ * É o que faz o preset ser de fato "o lugar onde corrigir todo mundo": o
+ * gateway compara o carimbo do manifesto gravado com esta constante ao resolver
+ * o tenant e, se o gravado é mais velho, regera na hora (`refreshStaleEvoManifest`)
+ * — sem rota de admin, sem token, sem o operador saber que houve deploy. Suba
+ * o número a cada mudança no CONJUNTO de consultas ou nos campos delas; uma
+ * mudança só de comentário não precisa.
+ *
+ *   1 · as 8 consultas originais (sem carimbo — um manifesto sem `preset` É v1)
+ *   2 · + `evo_modalidades`, `evo_grade_de_aulas`, `cacheTtlS` nas de negócio
+ */
+export const EVO_PRESET_VERSION = 2;
+
+/**
  * A normalização do telefone antes de ele virar filtro na EVO. Ver o item 3 do
  * cabeçalho: é a suposição a revisar primeiro quando uma academia ativar e
  * nenhuma consulta escopada achar ninguém.
@@ -222,6 +237,35 @@ export function evoPresetInputFromManifest(
   };
 }
 
+/**
+ * O manifesto gravado veio deste preset e é mais velho do que ele?
+ *
+ * Um manifesto sem carimbo que tem a forma da EVO (host e Basic) é a ativação
+ * de antes do carimbo existir — v1 por definição. Um manifesto que não tem a
+ * forma da EVO nunca é "velho": foi colado à mão, e regerar por cima apagaria
+ * o que o operador escreveu.
+ */
+export function isStaleEvoManifest(stored: TenantManifest): boolean {
+  if (stored.preset && stored.preset.name !== "evo") return false;
+  if (!evoPresetInputFromManifest(stored).ok) return false;
+  return (stored.preset?.version ?? 1) < EVO_PRESET_VERSION;
+}
+
+/**
+ * Regera um manifesto EVO desatualizado com o preset atual, reaproveitando o
+ * que está gravado. Devolve `null` quando não há o que fazer (não é do preset,
+ * ou já está na versão corrente) e quando a regeneração falha — nesse caso o
+ * chamador segue com o manifesto gravado, que continua válido: um deploy do
+ * preset nunca derruba um tenant que já funcionava.
+ */
+export function refreshStaleEvoManifest(stored: TenantManifest): TenantManifest | null {
+  if (!isStaleEvoManifest(stored)) return null;
+  const recovered = evoPresetInputFromManifest(stored);
+  if (!recovered.ok) return null;
+  const built = buildEvoManifestWithAuthorization(recovered.input);
+  return built.ok ? built.manifest : null;
+}
+
 export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInput): ManifestParseResult {
   const branch = input.idBranch === undefined ? {} : { idBranch: String(input.idBranch) };
   const label = input.label?.trim() || "EVO";
@@ -234,6 +278,7 @@ export function buildEvoManifestWithAuthorization(input: EvoPresetAuthorizedInpu
     tenantId: input.tenantId,
     label,
     baseUrl: EVO_BASE_URL,
+    preset: { name: "evo", version: EVO_PRESET_VERSION },
     auth: {
       type: "header",
       name: "Authorization",

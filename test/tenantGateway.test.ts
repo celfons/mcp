@@ -4,6 +4,7 @@ import { checkOutboundUrl, safeFetch, OutboundError } from "../src/tenant/safeUr
 import { project, readPath, parseRepeatPath } from "../src/tenant/project";
 import { resolveTenant, hashToken, readBearer } from "../src/tenant/store";
 import { runTool, asStringArgs } from "../src/tenant/gateway";
+import { buildEvoManifest, EVO_PRESET_VERSION } from "../src/tenant/presets/evo";
 
 // ---------------------------------------------------------------------------
 // O gateway por tenant (celfons/whatsapp#1324).
@@ -131,6 +132,88 @@ describe("isolamento entre tenants", () => {
 });
 
 // --- 2 · Manifesto ----------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Manifesto de preset é DERIVADO do código: quando o preset muda, o gravado é
+// regerado na leitura. É o que dispensa rota de admin e token para que uma
+// consulta nova chegue a quem ativou antes dela.
+// ---------------------------------------------------------------------------
+
+describe("regeneração do manifesto de preset na leitura", () => {
+  const evo = (overrides: Record<string, unknown> = {}) => {
+    const built = buildEvoManifest({ tenantId: "tnt_gym", dns: "gavioes", secretKey: "chave", idBranch: 107 });
+    if (!built.ok) throw new Error(built.error);
+    return { ...built.manifest, ...overrides };
+  };
+  /** A ativação de ANTES: sem carimbo e sem as consultas que entraram depois. */
+  const v1 = () => {
+    const { preset: _semCarimbo, ...m } = evo();
+    return { ...m, tools: m.tools.filter((t) => !["evo_modalidades", "evo_grade_de_aulas"].includes(t.name)) };
+  };
+  const kvWith = async (manifest: unknown) => {
+    const entries = new Map<string, unknown>([
+      [`tenant-token:${await hashToken(TOKEN_A)}`, "tnt_gym"],
+      ["tenant-manifest:tnt_gym", manifest]
+    ]);
+    const puts: string[] = [];
+    return {
+      puts,
+      get: async (key: string, type?: string) => {
+        const value = entries.get(key);
+        if (value === undefined) return null;
+        return type === "json" ? value : (value as string);
+      },
+      put: async (key: string, value: string) => {
+        puts.push(key);
+        entries.set(key, JSON.parse(value));
+      }
+    };
+  };
+
+  it("manifesto da ativação antiga sai regerado com o preset atual, e é gravado de volta", async () => {
+    const kv = await kvWith(v1());
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const nomes = resolved.tenant.manifest.tools.map((t) => t.name);
+    expect(nomes).toContain("evo_modalidades");
+    expect(nomes).toContain("evo_grade_de_aulas");
+    expect(resolved.tenant.manifest.preset).toEqual({ name: "evo", version: EVO_PRESET_VERSION });
+    // Credencial e unidade são as gravadas — ninguém digitou nada.
+    expect(resolved.tenant.manifest.auth).toEqual(v1().auth);
+    expect(resolved.tenant.manifest.tools.every((t) => t.query.idBranch === "107" || t.name === "evo_minha_frequencia")).toBe(true);
+    expect(kv.puts).toEqual(["tenant-manifest:tnt_gym"]);
+  });
+
+  it("manifesto na versão corrente não é regravado a cada leitura", async () => {
+    const kv = await kvWith(evo());
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    expect(kv.puts).toEqual([]);
+  });
+
+  it("manifesto colado à mão nunca é tocado — regerar por cima apagaria o que o operador escreveu", async () => {
+    const colado = manifestFor("tnt_gym", "api.cliente.com");
+    const kv = await kvWith(colado);
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.tenant.manifest.tools.map((t) => t.name)).toEqual(["consultar_pedido"]);
+    expect(kv.puts).toEqual([]);
+  });
+
+  it("falha ao regravar não falha a requisição — o manifesto novo serve este turno", async () => {
+    const kv = await kvWith(v1());
+    kv.put = async () => {
+      throw new Error("KV indisponível");
+    };
+    const resolved = await resolveTenant(request(TOKEN_A), { TENANT_MANIFESTS: kv } as unknown as Env);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.tenant.manifest.tools.map((t) => t.name)).toContain("evo_grade_de_aulas");
+  });
+});
 
 describe("manifesto", () => {
   it("aceita um manifesto completo", () => {

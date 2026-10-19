@@ -332,20 +332,25 @@ tradução manual e a promessa de "colável" seria falsa.
 
 Com `"include": "business"`, só as quatro últimas são anunciadas.
 
-> Preset novo não muda manifesto já gravado: o manifesto mora no KV e é gerado **na
-> ativação**. Uma academia ativada antes de uma consulta entrar no preset recebe a
-> consulta com o **refresh**, que regera o manifesto com o preset atual reaproveitando a
-> credencial, a unidade, o recorte e o rótulo gravados — sem DNS nem chave de novo, e
-> sem tocar no token da plataforma:
+> **Manifesto de preset é derivado do código.** Todo manifesto que o preset emite sai
+> carimbado com `preset: { name: "evo", version }` (`EVO_PRESET_VERSION`). Ao resolver o
+> tenant, o gateway compara o carimbo gravado com a versão do deploy corrente e, se o
+> gravado é mais velho (ou não tem carimbo, que é a ativação de antes), **regera na hora**
+> reaproveitando a credencial, a unidade, o recorte e o rótulo, e grava de volta. Uma
+> consulta nova do preset chega a toda academia já ativada na primeira mensagem depois
+> do deploy — sem rota de admin, sem token, sem operador. Manifesto colado à mão (sem
+> carimbo e sem a forma da EVO) nunca é tocado. Suba `EVO_PRESET_VERSION` a cada
+> mudança no conjunto de consultas.
+>
+> Para **forçar** a regeneração fora desse fluxo há a rota de admin, que faz a mesma
+> coisa sob demanda e devolve o diff (`added`/`removed`) e a `tool_policy`:
 >
 > ```bash
 > curl -X POST $GATEWAY/admin/tenants/tnt_gym/preset/evo/refresh \
 >   -H "Authorization: Bearer $ADMIN_TOKEN"
 > ```
 >
-> A resposta diz o que entrou (`added`) e o que saiu (`removed`) e devolve a `tool_policy`
-> nova para colar na plataforma. Responde 409 se o manifesto do tenant não veio do preset
-> (foi colado à mão): regerar por cima apagaria o que o operador escreveu.
+> Responde 409 se o manifesto do tenant não veio do preset.
 
 `evo_meu_plano` não precisa de salto porque `MembersBasicApiViewModel.memberships` já vem
 embutido na busca por telefone — uma consulta, e é o que a mantém barata.
