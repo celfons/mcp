@@ -9,6 +9,7 @@ import { registerGoogleBusinessTools } from "./social/google-business";
 import { registerYoutubeTools } from "./social/youtube";
 import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
+import { registerFirebaseTools, writesAllowed as firebaseWritesAllowed } from "./social/firebase";
 import { registerTenantTools } from "./tenant/gateway";
 import { resolveTenant, type ResolvedTenant } from "./tenant/store";
 import { putManifest, deleteManifest, getManifest, putEvoPreset, refreshEvoPreset } from "./tenant/admin";
@@ -35,7 +36,7 @@ const SERVERS: Record<
 > = {
   "/mcp": {
     name: "Social MCP Portal",
-    description: "Every social and Google tool in a single endpoint",
+    description: "Every social, Google and Firebase tool in a single endpoint",
     register: [
       registerInstagramTools,
       registerFacebookTools,
@@ -44,7 +45,8 @@ const SERVERS: Record<
       registerGoogleBusinessTools,
       registerYoutubeTools,
       registerGoogleAdsTools,
-      registerGoogleAnalyticsTools
+      registerGoogleAnalyticsTools,
+      registerFirebaseTools
     ]
   },
   "/mcp/instagram": {
@@ -96,6 +98,11 @@ const SERVERS: Record<
     name: "Google Analytics (GA4) MCP Server",
     description: "GA4 Data API and Admin API reports",
     register: [registerGoogleAnalyticsTools]
+  },
+  "/mcp/firebase": {
+    name: "Firebase MCP Server",
+    description: "Cloud Firestore and Remote Config tools",
+    register: [registerFirebaseTools]
   }
 };
 
@@ -155,7 +162,9 @@ function createServer(path: string, env: Env) {
                   env,
                   "GOOGLE_ADS_DEVELOPER_TOKEN"
                 ),
-                ga4PropertyId: hasSecret(env, "GA4_PROPERTY_ID")
+                ga4PropertyId: hasSecret(env, "GA4_PROPERTY_ID"),
+                firebaseProjectId: hasSecret(env, "FIREBASE_PROJECT_ID"),
+                firebaseWrites: firebaseWritesAllowed(env)
               }
             },
             null,

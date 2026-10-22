@@ -197,7 +197,8 @@ const ENDPOINTS = [
   { path: "/mcp/google-business", label: "GBP" },
   { path: "/mcp/youtube", label: "YouTube" },
   { path: "/mcp/google-ads", label: "Ads" },
-  { path: "/mcp/google-analytics", label: "GA4" }
+  { path: "/mcp/google-analytics", label: "GA4" },
+  { path: "/mcp/firebase", label: "Firebase" }
 ] as const;
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected";

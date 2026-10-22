@@ -16,6 +16,7 @@ MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**
 | `/mcp/youtube` | YouTube MCP Server | `youtube_*` |
 | `/mcp/google-ads` | Google Ads MCP Server | `google_ads_*` |
 | `/mcp/google-analytics` | Google Analytics MCP Server | `ga4_*` |
+| `/mcp/firebase` | Firebase MCP Server | `firestore_*`, `remote_config_*` |
 | `/mcp/tenant` | Tenant API Gateway | sintetizadas do manifesto do tenant |
 
 Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
@@ -573,6 +574,31 @@ situação do contrato, cobrança em aberto, aula agendada, vaga de hoje.
 | `ga4_realtime` | Users active right now |
 | `ga4_list_metadata` | Metrics and dimensions available on the property |
 
+### Firebase (`/mcp/firebase`)
+
+Cloud Firestore and Remote Config, on the same Google OAuth as the tools above. Every tool takes an optional `projectId`; the default is `FIREBASE_PROJECT_ID`.
+
+| Tool | What it does |
+|------|--------------|
+| `firestore_list_collections` | Root collections, or the subcollections of a document |
+| `firestore_list_documents` | Documents of a collection, paginated |
+| `firestore_get_document` | One document |
+| `firestore_query` | AND-ed filters (`==`, `!=`, `<`, `<=`, `>`, `>=`, `array-contains`, `in`, `array-contains-any`, `not-in`), `orderBy`, `limit`; collection groups with `allDescendants` |
+| `firestore_create_document` | Creates a document (auto ID or given) — **write** |
+| `firestore_update_document` | Merges the given top-level fields by default (`merge: false` replaces the document); `mustExist` refuses to create — **write** |
+| `firestore_delete_document` | Deletes a document (subcollections stay) — **write** |
+| `remote_config_get` | Template (parameters, groups, conditions) and its ETag; optionally a past version |
+| `remote_config_list_versions` | Published versions, newest first |
+| `remote_config_set_parameter` | Creates/updates one parameter and publishes; supports `validateOnly` — **write** |
+| `remote_config_delete_parameter` | Removes one parameter and publishes; supports `validateOnly` — **write** |
+| `remote_config_rollback` | Republishes a past version — **write** |
+
+**Writes are off by default.** The tools marked **write** refuse to run unless the `FIREBASE_ALLOW_WRITES` var is exactly `"true"`. `ping` reports both `firebaseProjectId` and `firebaseWrites`.
+
+Documents are read and written as plain JSON. Two escapes cover what JSON cannot say: `{"$timestamp": "2026-01-02T03:04:05Z"}` for timestamps and `{"$ref": "users/alice"}` for document references. Integers beyond 2^53 come back as strings, so they never lose precision silently. Field paths are dotted (`address.city`).
+
+Remote Config edits read the live template, change one parameter in place (also when it lives inside a parameter group) and publish with `If-Match` on the ETag that was read, so a concurrent publish makes the edit fail instead of being overwritten.
+
 ## Credentials
 
 Store them as Worker secrets — never in `wrangler.jsonc`:
@@ -587,7 +613,7 @@ npx wrangler secret put X_USER_ACCESS_TOKEN       # X user-context token (postin
 npx wrangler secret put WHATSAPP_ACCESS_TOKEN     # optional; falls back to FACEBOOK_ACCESS_TOKEN
 npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID  # default sender number ID
 
-# Google (shared by Business Profile, YouTube, Ads and Analytics)
+# Google (shared by Business Profile, YouTube, Ads, Analytics and Firebase)
 npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put GOOGLE_REFRESH_TOKEN
@@ -598,6 +624,9 @@ npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 npx wrangler secret put GOOGLE_ADS_LOGIN_CUSTOMER_ID  # optional, for MCC accounts
 npx wrangler secret put GOOGLE_ADS_CUSTOMER_ID        # optional default account
 npx wrangler secret put GA4_PROPERTY_ID               # optional default property
+npx wrangler secret put FIREBASE_PROJECT_ID           # default Firebase project
+npx wrangler secret put FIRESTORE_DATABASE_ID         # optional; defaults to "(default)"
+# FIREBASE_ALLOW_WRITES="true" (a var in wrangler.jsonc or a secret) enables the Firebase write tools
 ```
 
 Google access tokens expire in about an hour, so the Worker mints them on demand from the refresh token and caches them in the isolate. A static `GOOGLE_ACCESS_TOKEN` is also accepted, which is convenient for local testing but will expire in production.
@@ -614,6 +643,7 @@ Required permissions:
 - **YouTube**: `youtube.force-ssl` (writes); reads can use an API key
 - **Google Ads**: `adwords`, plus an approved developer token
 - **GA4**: `analytics.readonly`
+- **Firebase**: `datastore` (Firestore) and `firebase.remoteconfig`; enable the Cloud Firestore API and the Firebase Remote Config API on the OAuth client's project
 
 The Graph API version defaults to `v21.0` and can be changed with the `GRAPH_API_VERSION` var in `wrangler.jsonc`.
 
@@ -659,6 +689,7 @@ src/
     youtube.ts         youtube_* tools
     google-ads.ts      google_ads_* tools
     google-analytics.ts ga4_* tools
+    firebase.ts        firestore_* and remote_config_* tools
     env.d.ts           secret/var types
   tenant/
     manifest.ts        esquema do manifesto (a fronteira do gateway) + transforms
@@ -674,6 +705,7 @@ test/
   tenantResolve.test.ts  salto de resolução, transform, raiz, query fixa
   tenantAdmin.test.ts    rotas admin de manifesto e de preset
   evoPreset.test.ts      o preset da EVO e o acordo com a tool_policy
+  firebase.test.ts       conversão de valores do Firestore e filtros de consulta
 ```
 
 Testes: `npm test` (vitest).
