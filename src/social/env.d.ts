@@ -35,6 +35,12 @@ declare global {
     GOOGLE_ADS_API_VERSION?: string;
     /** Default GA4 property ID. */
     GA4_PROPERTY_ID?: string;
+    /** Default Firebase project ID (Firestore and Remote Config). */
+    FIREBASE_PROJECT_ID?: string;
+    /** Firestore database ID. Optional — defaults to "(default)". */
+    FIRESTORE_DATABASE_ID?: string;
+    /** Firestore/Remote Config writes are refused unless this is exactly "true". */
+    FIREBASE_ALLOW_WRITES?: string;
     /**
      * Manifestos do gateway por tenant (/mcp/tenant). Opcional: sem ele o
      * endpoint por tenant responde 503 e o resto do Worker segue igual.
