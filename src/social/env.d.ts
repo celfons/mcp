@@ -46,7 +46,7 @@ declare global {
      * endpoint por tenant responde 503 e o resto do Worker segue igual.
      */
     TENANT_MANIFESTS?: KVNamespace;
-    /** Service binding para o Worker esquina-social (rotas /esquina/*). */
+    /** Service binding para o Worker esquina-mcp (rotas /esquina/*). */
     ESQUINA?: Fetcher;
     /**
      * Segredo da rota de administração de manifestos. Sem ele, /admin/* responde

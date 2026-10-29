@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import worker from "../src/server";
 
 /**
- * /esquina/* é repassado ao Worker esquina-social pelo service binding, com a
+ * /esquina/* é repassado ao Worker esquina-mcp pelo service binding, com a
  * requisição intacta (o JWT do Access vai junto e é validado de novo lá).
  */
 function envWith(esquina?: { fetch: (r: Request) => Promise<Response> }) {

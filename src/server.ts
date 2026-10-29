@@ -29,7 +29,7 @@ const TENANT_PATH = "/mcp/tenant";
 
 /**
  * Automação social da Esquina Games (repo esquina-games/mcp-social, Worker
- * `esquina-social`). Aquele Worker não tem URL pública: entra por aqui, já
+ * `esquina-mcp`). Aquele Worker não tem URL pública: entra por aqui, já
  * atrás do Cloudflare Access, via service binding. A requisição vai inteira
  * (com o Cf-Access-Jwt-Assertion), e lá o JWT é validado de novo.
  */
@@ -208,9 +208,9 @@ export default {
     const path = pathname.replace(/\/+$/, "") || "/mcp";
 
     if (path === ESQUINA_PREFIX || path.startsWith(`${ESQUINA_PREFIX}/`)) {
-      // Sem o binding (ex.: o esquina-social ainda não foi publicado), o resto
+      // Sem o binding (ex.: o esquina-mcp ainda não foi publicado), o resto
       // deste Worker segue funcionando.
-      if (!env.ESQUINA) return new Response("esquina-social não está ligado a este Worker.", { status: 503 });
+      if (!env.ESQUINA) return new Response("esquina-mcp não está ligado a este Worker.", { status: 503 });
       return env.ESQUINA.fetch(request);
     }
 
