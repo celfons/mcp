@@ -17,7 +17,10 @@
 			"/mcp/*",
 			// Sem esta linha a rota de administração cairia nos assets estáticos e
 			// o Worker nunca a veria — 404 silencioso em produção, verde em teste.
-			"/admin/*"
+			"/admin/*",
+			// Automação da Esquina Games, repassada ao Worker esquina-mcp.
+			"/esquina",
+			"/esquina/*"
 		]
 	},
 	"vars": {
@@ -43,6 +46,17 @@
 		{
 			"binding": "TENANT_MANIFESTS",
 			"id": "bd1a4cae9bfe4daf932153003eb551d2"
+		}
+	],
+	/**
+	 * Worker esquina-mcp (repo esquina-games/mcp-social). Ele precisa estar
+	 * publicado ANTES deste deploy: binding para um Worker inexistente derruba
+	 * o deploy.
+	 */
+	"services": [
+		{
+			"binding": "ESQUINA",
+			"service": "esquina-mcp"
 		}
 	],
 	"observability": {
