@@ -27,6 +27,14 @@ const VERSION = "2.0.0";
  */
 const TENANT_PATH = "/mcp/tenant";
 
+/**
+ * Automação social da Esquina Games (repo esquina-games/mcp-social, Worker
+ * `esquina-social`). Aquele Worker não tem URL pública: entra por aqui, já
+ * atrás do Cloudflare Access, via service binding. A requisição vai inteira
+ * (com o Cf-Access-Jwt-Assertion), e lá o JWT é validado de novo.
+ */
+const ESQUINA_PREFIX = "/esquina";
+
 type Registrar = (server: McpServer, env: Env) => void;
 
 /** One MCP endpoint per social network, plus an aggregate at /mcp. */
@@ -198,6 +206,13 @@ export default {
   async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     const path = pathname.replace(/\/+$/, "") || "/mcp";
+
+    if (path === ESQUINA_PREFIX || path.startsWith(`${ESQUINA_PREFIX}/`)) {
+      // Sem o binding (ex.: o esquina-social ainda não foi publicado), o resto
+      // deste Worker segue funcionando.
+      if (!env.ESQUINA) return new Response("esquina-social não está ligado a este Worker.", { status: 503 });
+      return env.ESQUINA.fetch(request);
+    }
 
     // Ativação por PRESET: o manifesto é gerado de um punhado de campos, para a
     // API que muitos tenants compartilham. Casa antes da rota de manifesto
