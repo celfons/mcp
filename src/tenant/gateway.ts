@@ -234,11 +234,66 @@ const ageLabel = (ageMs: number): string => {
   return min < 60 ? `${min} min` : `${Math.round(min / 60)} h`;
 };
 
+/** O texto de "não achou" — um resultado `ok`, não um erro (ver `runToolLive`). */
+export const NO_DATA_TEXT = "Nenhum dado encontrado para esta consulta.";
+
+/** O prefixo de quando o filtro do modelo zerou a lista e ela saiu completa. */
+export const FILTER_DROPPED_NOTE = "Nenhum resultado com o filtro pedido; abaixo, a lista completa.";
+
+const isNoData = (result: ToolResult): boolean => !result.isError && result.content[0]?.text === NO_DATA_TEXT;
+
+/**
+ * Os argumentos que são FILTRO do modelo: declarados, opcionais, preenchidos e
+ * que não são a identidade. Só eles podem ser retirados numa segunda tentativa.
+ */
+function modelFilters(tool: TenantTool, args: Record<string, string | undefined>): string[] {
+  return tool.params
+    .filter((p) => !p.required && p.name !== tool.identityParam && (args[p.name] ?? "").trim() !== "")
+    .map((p) => p.name);
+}
+
+/**
+ * Executa a ferramenta — e, numa consulta de NEGÓCIO cujo filtro do modelo
+ * zerou a lista, refaz a consulta SEM o filtro.
+ *
+ * Por quê (Jardim Helena, 09/11/2026): o modelo que escolhe a consulta preenche
+ * `search`/`name` com as palavras do cliente ("aulas coletivas"), a EVO filtra
+ * por NOME, não acha nada com esse nome, e o agente responde "não tenho a lista
+ * aqui" para uma pergunta que a lista inteira respondia. Um filtro de vitrine é
+ * um atalho, não uma condição: se ele esvazia a resposta, a lista completa é a
+ * resposta certa — e o agente fica sabendo que o filtro não casou.
+ *
+ * Só em `business`: lá não há pessoa, então afrouxar o filtro não alarga o que
+ * alguém vê de outro alguém. Numa consulta `customer` um filtro retirado poderia
+ * ser exatamente o que restringe a resposta ao dono do telefone — lá, vazio
+ * segue vazio. O valor do filtro NÃO volta no texto: ele veio da mensagem do
+ * cliente, e o texto entra no prompt como lastro.
+ */
 export async function runTool(
   manifest: TenantManifest,
   tool: TenantTool,
   args: Record<string, string | undefined>,
   now: () => number = Date.now,
+  cache?: ToolCache
+): Promise<ToolResult> {
+  const first = await runToolCached(manifest, tool, args, now, cache);
+  if (tool.scope !== "business" || !isNoData(first)) return first;
+
+  const filters = modelFilters(tool, args);
+  if (filters.length === 0) return first;
+
+  const unfiltered: Record<string, string | undefined> = { ...args };
+  for (const name of filters) delete unfiltered[name];
+  const second = await runToolCached(manifest, tool, unfiltered, now, cache);
+  if (second.isError || isNoData(second)) return first;
+  return ok(`${FILTER_DROPPED_NOTE}\n${second.content[0].text}`);
+}
+
+async function runToolCached(
+  manifest: TenantManifest,
+  tool: TenantTool,
+  args: Record<string, string | undefined>,
+  now: () => number,
   cache?: ToolCache
 ): Promise<ToolResult> {
   const missing = missingRequired(tool, args);
@@ -326,7 +381,7 @@ async function runToolLive(
   if (!projected.text) {
     // Sem campo nenhum, a consulta não tem o que informar. Dizer isso é melhor
     // do que devolver vazio: o agente segue a conversa sabendo que não achou.
-    return ok("Nenhum dado encontrado para esta consulta.");
+    return ok(NO_DATA_TEXT);
   }
   return ok(projected.text);
 }
