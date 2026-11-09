@@ -3,7 +3,7 @@ import { parseManifest } from "../src/tenant/manifest";
 import { checkOutboundUrl, safeFetch, OutboundError } from "../src/tenant/safeUrl";
 import { project, readPath, parseRepeatPath } from "../src/tenant/project";
 import { resolveTenant, hashToken, readBearer } from "../src/tenant/store";
-import { runTool, asStringArgs } from "../src/tenant/gateway";
+import { runTool, asStringArgs, FILTER_DROPPED_NOTE, NO_DATA_TEXT } from "../src/tenant/gateway";
 import { buildEvoManifest, EVO_PRESET_VERSION } from "../src/tenant/presets/evo";
 
 // ---------------------------------------------------------------------------
@@ -524,6 +524,74 @@ describe("cache das consultas de negócio", () => {
     const result = await runTool(built.manifest, tool, {}, () => clock, cache);
 
     expect(result.isError).toBe(true);
+  });
+
+  // Jardim Helena, 09/11/2026: `search="aulas coletivas"` zerou a lista e o
+  // agente respondeu "não tenho a lista aqui".
+  it("filtro do modelo que zera a lista de negócio: refaz sem o filtro e avisa que não casou", async () => {
+    const built = withBusiness(600);
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("[]", { status: 200 }))
+      .mockResolvedValueOnce(planos(1));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runTool(built.manifest, tool, { nome: "aulas coletivas" }, Date.now, fakeCache());
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("nome")).toBe("aulas coletivas");
+    expect(new URL(fetchMock.mock.calls[1][0] as string).searchParams.has("nome")).toBe(false);
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toBe(`${FILTER_DROPPED_NOTE}\nPlano: Plano 1 · Valor: 101`);
+    // O valor do filtro veio do cliente: não volta no texto que vira lastro.
+    expect(result.content[0].text).not.toMatch(/aulas coletivas/);
+  });
+
+  it("sem filtro, ou com a lista completa também vazia, o vazio segue vazio", async () => {
+    const built = withBusiness();
+    if (!built.ok) throw new Error(built.error);
+    const tool = built.manifest.tools.find((t) => t.name === "tabela_precos")!;
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const semFiltro = await runTool(built.manifest, tool, {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(semFiltro.content[0].text).toBe(NO_DATA_TEXT);
+
+    const comFiltro = await runTool(built.manifest, tool, { nome: "vip" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(comFiltro.content[0].text).toBe(NO_DATA_TEXT);
+  });
+
+  it("consulta de CLIENTE vazia nunca é refeita sem filtro", async () => {
+    const built = parseManifest({
+      ...manifestFor("tnt_a", "api.cliente.com"),
+      tools: [
+        {
+          name: "meus_pedidos",
+          description: "Pedidos do cliente",
+          method: "GET",
+          path: "/pedidos",
+          scope: "customer",
+          identityParam: "telefone",
+          params: [
+            { name: "telefone", in: "query", required: true },
+            { name: "status", in: "query" }
+          ],
+          fields: [{ path: "[].id", label: "Pedido" }]
+        }
+      ]
+    });
+    if (!built.ok) throw new Error(built.error);
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runTool(built.manifest, built.manifest.tools[0], { telefone: "5511", status: "aberto" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.content[0].text).toBe(NO_DATA_TEXT);
   });
 
   it("sem TTL declarado, ou sem cache injetado, toda chamada vai ao fio", async () => {
