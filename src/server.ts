@@ -9,6 +9,7 @@ import { registerGoogleBusinessTools } from "./social/google-business";
 import { registerYoutubeTools } from "./social/youtube";
 import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
+import { registerMetaAdsTools } from "./social/meta-ads";
 import { registerFirebaseTools, writesAllowed as firebaseWritesAllowed } from "./social/firebase";
 import { registerTenantTools } from "./tenant/gateway";
 import { getTenantManifest, resolveTenant, type ResolvedTenant } from "./tenant/store";
@@ -16,6 +17,7 @@ import { verifyAccess } from "./owner/access";
 import { ownerTenants, putOwners } from "./owner/owners";
 import { evoAccessFromManifest } from "./owner/evoGestao";
 import { createGestaoServer } from "./owner/gestaoServer";
+import { getTenantMetaAds, metaAdsScopeOf, putTenantMetaAds, getTenantMetaAdsAdmin, deleteTenantMetaAds } from "./tenant/metaAds";
 import { putManifest, deleteManifest, getManifest, putEvoPreset, refreshEvoPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
@@ -66,6 +68,7 @@ const SERVERS: Record<
     register: [
       registerInstagramTools,
       registerFacebookTools,
+      registerMetaAdsTools,
       registerTwitterTools,
       registerWhatsappTools,
       registerGoogleBusinessTools,
@@ -84,6 +87,11 @@ const SERVERS: Record<
     name: "Facebook MCP Server",
     description: "Facebook Pages Graph API tools",
     register: [registerFacebookTools]
+  },
+  "/mcp/meta-ads": {
+    name: "Meta Ads MCP Server",
+    description: "Meta Marketing API (read-only): campaigns, ad sets, ads and insights",
+    register: [registerMetaAdsTools]
   },
   "/mcp/x": {
     name: "X (Twitter) MCP Server",
@@ -173,6 +181,8 @@ function createServer(path: string, env: Env) {
               credentials: {
                 instagram: hasSecret(env, "INSTAGRAM_ACCESS_TOKEN"),
                 facebook: hasSecret(env, "FACEBOOK_ACCESS_TOKEN"),
+                metaAds: hasSecret(env, "META_ADS_ACCESS_TOKEN") || hasSecret(env, "FACEBOOK_ACCESS_TOKEN"),
+                metaAdAccountId: hasSecret(env, "META_AD_ACCOUNT_ID"),
                 x: hasSecret(env, "X_BEARER_TOKEN"),
                 xUserContext: hasSecret(env, "X_USER_ACCESS_TOKEN"),
                 whatsapp: hasSecret(env, "WHATSAPP_ACCESS_TOKEN"),
@@ -255,6 +265,23 @@ export default {
       });
     }
 
+    const metaAdmin = /^\/admin\/tenants\/([^/]+)\/meta-ads$/.exec(path);
+    if (metaAdmin) {
+      const tenantId = decodeURIComponent(metaAdmin[1]);
+      const result =
+        request.method === "PUT"
+          ? await putTenantMetaAds(request, env, tenantId)
+          : request.method === "GET"
+            ? await getTenantMetaAdsAdmin(request, env, tenantId)
+            : request.method === "DELETE"
+              ? await deleteTenantMetaAds(request, env, tenantId)
+              : { status: 405, body: { error: "Método não suportado." } };
+      return new Response(JSON.stringify(result.body), {
+        status: result.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
     const owners = /^\/admin\/tenants\/([^/]+)\/owners$/.exec(path);
     if (owners) {
       const result =
@@ -302,7 +329,8 @@ export default {
       if (!resolved.ok) return deny(404, "Academia sem integração cadastrada.");
       const access = evoAccessFromManifest(resolved.tenant.manifest);
       if (!access) return deny(404, "Esta academia não está integrada à EVO.");
-      return createMcpHandler(() => createGestaoServer(resolved.tenant, access, env), { route: path })(
+      const metaAds = metaAdsScopeOf(await getTenantMetaAds(env, tenantId));
+      return createMcpHandler(() => createGestaoServer(resolved.tenant, access, env, metaAds), { route: path })(
         request,
         env,
         ctx

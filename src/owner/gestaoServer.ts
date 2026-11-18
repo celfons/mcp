@@ -3,6 +3,7 @@ import { registerTenantTools } from "../tenant/gateway";
 import type { ResolvedTenant } from "../tenant/store";
 import { registerEvoGestaoTools, type EvoAccess } from "./evoGestao";
 import { registerEvoApiTools } from "./evoApi";
+import { registerMetaAdsTools, type MetaAdsScope } from "../social/meta-ads";
 
 export const GESTAO_VERSION = "2.0.0";
 
@@ -17,7 +18,12 @@ export const GESTAO_VERSION = "2.0.0";
  * academia (`GestaoGateway`). Duas montagens seriam duas listas de ferramentas
  * divergindo em silêncio.
  */
-export function createGestaoServer(tenant: ResolvedTenant, access: EvoAccess, env: Env): McpServer {
+export function createGestaoServer(
+  tenant: ResolvedTenant,
+  access: EvoAccess,
+  env: Env,
+  metaAds: MetaAdsScope | null = null
+): McpServer {
   const server = new McpServer({
     name: `Gestão da academia — ${tenant.manifest.label}`,
     version: GESTAO_VERSION
@@ -26,6 +32,8 @@ export function createGestaoServer(tenant: ResolvedTenant, access: EvoAccess, en
   // Toda a API de leitura da EVO, uma ferramenta por rota GET, com dado pessoal
   // mascarado. Só aqui: o agente do WhatsApp (`/mcp/tenant`) não as recebe.
   registerEvoApiTools(server, access);
+  // Anúncios da Meta da PRÓPRIA academia, quando cadastrados (src/tenant/metaAds.ts): presos à conta dela.
+  if (metaAds) registerMetaAdsTools(server, env, metaAds);
   registerTenantTools(
     server,
     { ...tenant.manifest, tools: tenant.manifest.tools.filter((tool) => tool.scope === "business") },

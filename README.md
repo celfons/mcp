@@ -9,6 +9,7 @@ MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**
 | `/mcp` | Social MCP Portal | every tool below, in one endpoint |
 | `/mcp/instagram` | Instagram MCP Server | `instagram_*` |
 | `/mcp/facebook` | Facebook MCP Server | `facebook_*` |
+| `/mcp/meta-ads` | Meta Ads MCP Server (só leitura) | `meta_ads_*` |
 | `/mcp/x` | X (Twitter) MCP Server | `x_*` |
 | `/mcp/whatsapp` | WhatsApp MCP Server | `whatsapp_*` |
 | `/mcp/google` | Google MCP Server | all four Google servers below |
@@ -18,7 +19,7 @@ MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**
 | `/mcp/google-analytics` | Google Analytics MCP Server | `ga4_*` |
 | `/mcp/firebase` | Firebase MCP Server | `firestore_*`, `remote_config_*` |
 | `/mcp/tenant` | Tenant API Gateway | sintetizadas do manifesto do tenant |
-| `/mcp/gestao/<tenantId>` | Gestão da academia (dono) | `evo_gestao_*` + vitrine EVO |
+| `/mcp/gestao/<tenantId>` | Gestão da academia (dono) | `evo_gestao_*` + `evo_v*_*` + vitrine EVO + `meta_ads_*` da academia (se cadastrada) |
 
 Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
 
@@ -525,6 +526,25 @@ Se a rota responder `401 Sessão do Cloudflare Access ausente`, a requisição n
 chegou com o JWT do Access: coloque o host do Worker atrás de um aplicativo do
 Access (o mesmo provedor de identidade do portal) e use o AUD desse aplicativo.
 
+### Meta Ads da academia (cruzar anúncios com vendas)
+
+Com a conta de anúncio da academia cadastrada, a mesma gestão ganha as ferramentas
+`meta_ads_*` (só leitura) **presas àquela conta e ao token dela**: o modelo não escolhe
+outra conta nem consulta campanha/conjunto/anúncio por id solto — tudo sai sob
+`act_<conta>`, com o pai virando filtro. Sem cadastro, a gestão não tem Meta (nem com
+o token global do Worker).
+
+```bash
+curl -X PUT "$GATEWAY/admin/tenants/<tenantId>/meta-ads" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d "{ \"accessToken\": \"$META_TOKEN\", \"adAccountId\": \"act_123\" }"
+# GET  → o que está cadastrado (nunca o token) · DELETE → remove
+```
+
+O token precisa de `ads_read` (token de usuário do sistema do Business Manager é o
+recomendado: não expira). Antes de gravar, a rota testa o token contra a conta; se a
+Meta recusar, nada é gravado.
+
 ## Tools
 
 ### Instagram (Graph API — Business/Creator accounts)
@@ -601,6 +621,19 @@ Access (o mesmo provedor de identidade do portal) e use o AUD desse aplicativo.
 | `youtube_reply_to_comment` | Replies to a comment |
 | `youtube_update_video` | Title, description, tags, privacy |
 
+### Meta Ads (só leitura)
+
+| Tool | Does |
+|------|------|
+| `meta_ads_list_accounts` | Contas de anúncio que o token alcança (na gestão: só a da academia) |
+| `meta_ads_list_campaigns` | Campanhas: objetivo, status, orçamento, datas |
+| `meta_ads_list_adsets` | Conjuntos: meta de otimização, destino (ex.: WhatsApp), orçamento |
+| `meta_ads_list_ads` | Anúncios e criativos; o id é o mesmo das conversas iniciadas por anúncio no WhatsApp |
+| `meta_ads_insights` | Gasto, impressões, alcance, cliques, CTR, CPC, CPM e resultados (leads, conversas iniciadas, cadastros, compras) com custo por resultado; por conta/campanha/conjunto/anúncio, por dia/semana/mês e por idade/gênero/plataforma/região; com totais |
+
+Fora de propósito: qualquer escrita (criar, pausar, orçamento) e os leads de formulário
+(nome, telefone, e-mail) — a contagem de leads vem nos insights, sem dado pessoal.
+
 ### Google Ads
 
 | Tool | What it does |
@@ -657,6 +690,8 @@ Store them as Worker secrets — never in `wrangler.jsonc`:
 ```sh
 npx wrangler secret put FACEBOOK_ACCESS_TOKEN     # Page token (Facebook, and Instagram fallback)
 npx wrangler secret put INSTAGRAM_ACCESS_TOKEN    # optional; overrides the token above for Instagram
+npx wrangler secret put META_ADS_ACCESS_TOKEN     # Meta Ads, ads_read (falls back to FACEBOOK_ACCESS_TOKEN) — global /mcp only
+npx wrangler secret put META_AD_ACCOUNT_ID        # optional default ad account (act_123)
 npx wrangler secret put X_BEARER_TOKEN            # X app-only token (reads)
 npx wrangler secret put X_USER_ACCESS_TOKEN       # X user-context token (posting/deleting)
 
@@ -688,6 +723,7 @@ Required permissions:
 
 - **Instagram**: `instagram_basic`, `instagram_content_publish`, `instagram_manage_comments`
 - **Facebook**: `pages_read_engagement`, `pages_manage_posts`, `pages_manage_engagement`
+- **Meta Ads**: `ads_read` (user or system-user token; a Page token does not read ads)
 - **X**: `tweet.read`, `users.read`, and `tweet.write` for publishing
 - **WhatsApp**: `whatsapp_business_messaging`, `whatsapp_business_management`
 - **Google Business Profile**: `business.manage`
