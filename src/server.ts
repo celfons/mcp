@@ -11,7 +11,10 @@ import { registerGoogleAdsTools } from "./social/google-ads";
 import { registerGoogleAnalyticsTools } from "./social/google-analytics";
 import { registerFirebaseTools, writesAllowed as firebaseWritesAllowed } from "./social/firebase";
 import { registerTenantTools } from "./tenant/gateway";
-import { resolveTenant, type ResolvedTenant } from "./tenant/store";
+import { getTenantManifest, resolveTenant, type ResolvedTenant } from "./tenant/store";
+import { verifyAccess } from "./owner/access";
+import { ownerTenants, putOwners } from "./owner/owners";
+import { evoAccessFromManifest, registerEvoGestaoTools, type EvoAccess } from "./owner/evoGestao";
 import { putManifest, deleteManifest, getManifest, putEvoPreset, refreshEvoPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
@@ -34,6 +37,16 @@ const TENANT_PATH = "/mcp/tenant";
  * (com o Cf-Access-Jwt-Assertion), e lá o JWT é validado de novo.
  */
 const ESQUINA_PREFIX = "/esquina";
+
+/**
+ * A gestão da academia para o DONO: `/mcp/gestao/<tenantId>`.
+ *
+ * Quem chama é o claude.ai (conector personalizado), passando pelo portal MCP
+ * com OAuth; o tenant vem da URL e a autorização do login do Access, conferido
+ * contra a lista de donos daquela academia (`owner-email:*`). Sem token por
+ * tenant: o claude.ai não manda cabeçalho fixo.
+ */
+const GESTAO_RE = /^\/mcp\/gestao\/([A-Za-z0-9_-]{1,80})$/;
 
 type Registrar = (server: McpServer, env: Env) => void;
 
@@ -129,6 +142,23 @@ function createTenantServer(tenant: ResolvedTenant, env: Env) {
   // O cache das consultas de negócio mora no MESMO namespace dos manifestos,
   // sob prefixo próprio (`tool-cache:`), para não exigir um binding novo.
   registerTenantTools(server, tenant.manifest, env.TENANT_MANIFESTS ?? undefined);
+  return server;
+}
+
+function createGestaoServer(tenant: ResolvedTenant, access: EvoAccess, env: Env) {
+  const server = new McpServer({
+    name: `Gestão da academia — ${tenant.manifest.label}`,
+    version: VERSION
+  });
+  registerEvoGestaoTools(server, access);
+  // A vitrine (planos, preços, grade) também serve ao dono. As consultas do
+  // ALUNO ficam de fora: elas preencheriam o telefone de quem chama, e o dono
+  // não é aluno.
+  registerTenantTools(
+    server,
+    { ...tenant.manifest, tools: tenant.manifest.tools.filter((tool) => tool.scope === "business") },
+    env.TENANT_MANIFESTS ?? undefined
+  );
   return server;
 }
 
@@ -237,6 +267,18 @@ export default {
       });
     }
 
+    const owners = /^\/admin\/tenants\/([^/]+)\/owners$/.exec(path);
+    if (owners) {
+      const result =
+        request.method === "PUT"
+          ? await putOwners(request, env, decodeURIComponent(owners[1]))
+          : { status: 405, body: { error: "Método não suportado." } };
+      return new Response(JSON.stringify(result.body), {
+        status: result.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
     // Administração dos manifestos (celfons/whatsapp#1327). Fora do protocolo
     // MCP de propósito: quem chama aqui é o portal do operador, não um agente.
     const admin = /^\/admin\/tenants\/([^/]+)\/manifest$/.exec(path);
@@ -254,6 +296,29 @@ export default {
         status: result.status,
         headers: { "Content-Type": "application/json" }
       });
+    }
+
+    const gestao = GESTAO_RE.exec(path);
+    if (gestao) {
+      const deny = (status: number, error: string) =>
+        new Response(JSON.stringify({ error }), { status, headers: { "Content-Type": "application/json" } });
+      const identity = await verifyAccess(request, env);
+      if (!identity.ok) return deny(identity.status, identity.reason);
+      const tenantId = gestao[1];
+      // Mesma resposta para "academia não existe" e "não é sua": a rota não
+      // confirma a ninguém quais academias existem.
+      if (!(await ownerTenants(env, identity.email)).includes(tenantId)) {
+        return deny(403, "Este login não tem acesso a esta academia.");
+      }
+      const resolved = await getTenantManifest(env, tenantId);
+      if (!resolved.ok) return deny(404, "Academia sem integração cadastrada.");
+      const access = evoAccessFromManifest(resolved.tenant.manifest);
+      if (!access) return deny(404, "Esta academia não está integrada à EVO.");
+      return createMcpHandler(() => createGestaoServer(resolved.tenant, access, env), { route: path })(
+        request,
+        env,
+        ctx
+      );
     }
 
     if (path === TENANT_PATH) {
