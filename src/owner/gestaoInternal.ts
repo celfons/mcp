@@ -2,6 +2,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { resolveTenant } from "../tenant/store";
 import { evoAccessFromManifest } from "./evoGestao";
 import { createGestaoServer } from "./gestaoServer";
+import { getTenantMetaAds, metaAdsScopeOf } from "../tenant/metaAds";
 
 /**
  * A gestão da academia pela LIGAÇÃO INTERNA (celfons/whatsapp → este Worker).
@@ -46,8 +47,9 @@ export async function handleGestaoInternal(request: Request, env: Env, ctx: Exec
   }
   const access = evoAccessFromManifest(resolved.tenant.manifest);
   if (!access) return json(404, "Esta academia não está integrada à EVO.");
+  const metaAds = metaAdsScopeOf(await getTenantMetaAds(env, resolved.tenant.tenantId));
 
-  return createMcpHandler(() => createGestaoServer(resolved.tenant, access, env), { route: GESTAO_INTERNAL_PATH })(
+  return createMcpHandler(() => createGestaoServer(resolved.tenant, access, env, metaAds), { route: GESTAO_INTERNAL_PATH })(
     request,
     env,
     ctx

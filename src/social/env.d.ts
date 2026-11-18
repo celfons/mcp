@@ -11,6 +11,10 @@ declare global {
     INSTAGRAM_ACCESS_TOKEN?: string;
     /** Facebook Page / user access token. */
     FACEBOOK_ACCESS_TOKEN?: string;
+    /** Meta Ads (Marketing API) token with `ads_read`. Falls back to FACEBOOK_ACCESS_TOKEN. */
+    META_ADS_ACCESS_TOKEN?: string;
+    /** Default Meta ad account (act_123 or 123). */
+    META_AD_ACCOUNT_ID?: string;
     /** X API v2 app-only bearer token (reads). */
     X_BEARER_TOKEN?: string;
     /** X API v2 user-context token (posting/deleting). */
