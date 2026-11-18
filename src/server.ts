@@ -14,7 +14,8 @@ import { registerTenantTools } from "./tenant/gateway";
 import { getTenantManifest, resolveTenant, type ResolvedTenant } from "./tenant/store";
 import { verifyAccess } from "./owner/access";
 import { ownerTenants, putOwners } from "./owner/owners";
-import { evoAccessFromManifest, registerEvoGestaoTools, type EvoAccess } from "./owner/evoGestao";
+import { evoAccessFromManifest } from "./owner/evoGestao";
+import { createGestaoServer } from "./owner/gestaoServer";
 import { putManifest, deleteManifest, getManifest, putEvoPreset, refreshEvoPreset } from "./tenant/admin";
 
 const VERSION = "2.0.0";
@@ -45,6 +46,10 @@ const ESQUINA_PREFIX = "/esquina";
  * com OAuth; o tenant vem da URL e a autorização do login do Access, conferido
  * contra a lista de donos daquela academia (`owner-email:*`). Sem token por
  * tenant: o claude.ai não manda cabeçalho fixo.
+ *
+ * A outra porta da mesma gestão — o token da academia, vindo do `whatsapp` —
+ * NÃO passa por aqui: mora na entrypoint nomeada `GestaoGateway` (src/index.ts),
+ * que a internet não alcança.
  */
 const GESTAO_RE = /^\/mcp\/gestao\/([A-Za-z0-9_-]{1,80})$/;
 
@@ -142,23 +147,6 @@ function createTenantServer(tenant: ResolvedTenant, env: Env) {
   // O cache das consultas de negócio mora no MESMO namespace dos manifestos,
   // sob prefixo próprio (`tool-cache:`), para não exigir um binding novo.
   registerTenantTools(server, tenant.manifest, env.TENANT_MANIFESTS ?? undefined);
-  return server;
-}
-
-function createGestaoServer(tenant: ResolvedTenant, access: EvoAccess, env: Env) {
-  const server = new McpServer({
-    name: `Gestão da academia — ${tenant.manifest.label}`,
-    version: VERSION
-  });
-  registerEvoGestaoTools(server, access);
-  // A vitrine (planos, preços, grade) também serve ao dono. As consultas do
-  // ALUNO ficam de fora: elas preencheriam o telefone de quem chama, e o dono
-  // não é aluno.
-  registerTenantTools(
-    server,
-    { ...tenant.manifest, tools: tenant.manifest.tools.filter((tool) => tool.scope === "business") },
-    env.TENANT_MANIFESTS ?? undefined
-  );
   return server;
 }
 
