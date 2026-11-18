@@ -72,6 +72,21 @@ export async function resolveTenant(request: Request, env: Env): Promise<Resolve
   const tenantId = await kv.get(`${TOKEN_PREFIX}${await hashToken(token)}`);
   if (!tenantId) return { ok: false, reason: "unknown_token" };
 
+  return loadTenantManifest(kv, tenantId);
+}
+
+/**
+ * O manifesto de UM tenant já identificado (pelo token, ou — na rota do dono —
+ * pelo login do Access conferido contra a lista de donos). Não é listagem: quem
+ * chama já decidiu de quem é a requisição.
+ */
+export async function getTenantManifest(env: Env, tenantId: string): Promise<ResolveResult> {
+  const kv = store(env);
+  if (!kv) return { ok: false, reason: "no_store" };
+  return loadTenantManifest(kv, tenantId);
+}
+
+async function loadTenantManifest(kv: KVNamespace, tenantId: string): Promise<ResolveResult> {
   const raw = await kv.get(`${MANIFEST_PREFIX}${tenantId}`, "json");
   if (!raw) return { ok: false, reason: "no_manifest" };
 

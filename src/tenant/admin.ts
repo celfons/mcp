@@ -44,7 +44,7 @@ export function secretsMatch(a: string, b: string): boolean {
   return diff === 0;
 }
 
-function authorize(request: Request, env: Env): AdminResult | null {
+export function authorize(request: Request, env: Env): AdminResult | null {
   const expected = (env as Record<string, unknown>).ADMIN_TOKEN;
   if (typeof expected !== "string" || expected.length < 16) {
     return json(503, { error: "Administração não está configurada neste ambiente." });

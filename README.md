@@ -18,6 +18,7 @@ MCP servers for **Instagram**, **Facebook Pages**, **X (Twitter)**, **WhatsApp**
 | `/mcp/google-analytics` | Google Analytics MCP Server | `ga4_*` |
 | `/mcp/firebase` | Firebase MCP Server | `firestore_*`, `remote_config_*` |
 | `/mcp/tenant` | Tenant API Gateway | sintetizadas do manifesto do tenant |
+| `/mcp/gestao/<tenantId>` | Gestão da academia (dono) | `evo_gestao_*` + vitrine EVO |
 
 Every endpoint also exposes `ping`, which reports which credentials are configured — handy for checking the deploy without touching the social APIs.
 
@@ -473,6 +474,56 @@ semestre. Ele está aqui para quem quer o preço sempre vivo — mas contexto qu
 (tabela de preços, horário, modalidades) sai mais barato no portal do agente ou no RAG,
 que já são lastro e custam zero de latência. O MCP se paga no dado **vivo e por pessoa**:
 situação do contrato, cobrança em aberto, aula agendada, vaga de hoje.
+
+## Gestão da academia para o dono (`/mcp/gestao/<tenantId>`)
+
+A rota que o **dono** cadastra no claude.ai como conector personalizado, para
+perguntar sobre o negócio e montar dashboards (ex.: cruzar com Meta Ads). É
+diferente de `/mcp/tenant`, que serve o agente de WhatsApp:
+
+| | `/mcp/tenant` (agente) | `/mcp/gestao/<tenantId>` (dono) |
+|---|---|---|
+| Quem chama | backend da plataforma | claude.ai, via portal MCP com OAuth |
+| Identifica por | `Authorization: Bearer <token do tenant>` | login do Cloudflare Access (`Cf-Access-Jwt-Assertion`) + lista de donos |
+| Ferramentas | vitrine + consultas do aluno (telefone verificado) | `evo_gestao_*` (agregadas) + vitrine; **sem** consultas do aluno |
+| Saída | texto projetado, ≤ 1800 caracteres | JSON com totais; nenhum nome, CPF ou telefone de aluno |
+
+Ferramentas (só GET na EVO, paginando até 10.000 registros por consulta; período padrão = últimos 30 dias, máximo 366):
+
+| Ferramenta | Rota EVO | Devolve |
+|---|---|---|
+| `evo_gestao_vendas` | `/api/v2/sales` | vendas, valor, ticket médio, por dia, por plano/item, por vendedor |
+| `evo_gestao_prospects` | `/api/v1/prospects` | leads, conversão em aluno, por dia e por canal (`mktChannel`) |
+| `evo_gestao_ativos` | `/api/v2/members/active-members` | alunos e contratos ativos, por contrato |
+| `evo_gestao_cancelamentos` | `/api/v3/membermembership` | cancelados, por dia, motivo e plano |
+| `evo_gestao_inadimplencia` | `/api/v1/receivables/debtors` | devedores, valor pendente e recuperado |
+| `evo_gestao_entradas` | `/api/v2/entries` | entradas, alunos distintos, por dia |
+
+### Ativar
+
+1. **Configuração do Access** (vars do Worker): `ACCESS_TEAM_DOMAIN` (ex.:
+   `closing.cloudflareaccess.com`) e `ACCESS_AUD` (o *Application Audience
+   (AUD) Tag* do aplicativo do Access na frente deste Worker). Sem as duas, a
+   rota responde 503.
+2. **A academia já ativada com o preset EVO** (seção acima). A rota usa a mesma
+   credencial; sem preset EVO, 404.
+3. **Quem é dono** (e-mail do login do Access):
+
+```bash
+curl -X PUT "$GATEWAY/admin/tenants/<tenantId>/owners" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{ "emails": ["dono@academia.com.br"] }'
+# remover: { "emails": [], "removeEmails": ["ex-socio@academia.com.br"] }
+```
+
+4. **No portal MCP** (Zero Trust → AI controls / MCP server portals): adicione o
+   servidor `https://<host-do-worker>/mcp/gestao/<tenantId>`.
+5. **No claude.ai**: Configurações → Conectores → Adicionar conector
+   personalizado → URL do portal → fazer login.
+
+Se a rota responder `401 Sessão do Cloudflare Access ausente`, a requisição não
+chegou com o JWT do Access: coloque o host do Worker atrás de um aplicativo do
+Access (o mesmo provedor de identidade do portal) e use o AUD desse aplicativo.
 
 ## Tools
 
